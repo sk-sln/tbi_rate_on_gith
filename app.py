@@ -124,8 +124,8 @@ def main():
                 print(f"Ошибка сети при отправке в ГАС: {e}")
 
         # СЛИП 15 МИНУТ перед следующим полным кругом
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Сплю 15 минут...")
-        time.sleep(900)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Сплю 14 минут...")
+        time.sleep(840)
 
 if __name__ == "__main__":
     main()
