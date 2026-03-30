@@ -1,108 +1,67 @@
-import requests
-from bs4 import BeautifulSoup
 import json
+import os
+import time
 
-def format_entry(bank_name, data, is_online):
-    """
-    Единый стандарт записи для кэша.
-    is_online: True (курс в приложении), False (курс в отделении)
-    """
+# --- НАСТРОЙКИ ---
+CACHE_FILE = "cache.json"
+
+def make_standard_entry(bank_name, usd_buy, usd_sell, eur_buy, eur_sell, is_online):
+    """Формирует чистый словарь для Flutter"""
     return {
         "bank": bank_name,
         "is_online": is_online,
-        "usd_buy": data.get("usd_buy", "---"),
-        "usd_sell": data.get("usd_sell", "---"),
-        "eur_buy": data.get("eur_buy", "---"),
-        "eur_sell": data.get("eur_sell", "---")
+        "usd_buy": str(usd_buy).strip().replace(',', '.'),
+        "usd_sell": str(usd_sell).strip().replace(',', '.'),
+        "eur_buy": str(eur_buy).strip().replace(',', '.'),
+        "eur_sell": str(eur_sell).strip().replace(',', '.')
     }
 
-def get_all_rates():
-    headers = {"User-Agent": "Mozilla/5.0"}
-    final_cache = []
-
-    # --- 1. BOG (Digital + Branch) ---
+def save_cache_atomic(data):
+    """Атомарная запись: сначала в темп, потом замена"""
+    temp_file = CACHE_FILE + ".tmp"
     try:
-        r = requests.get("https://bog.ge/en/personal/currencys", headers=headers, timeout=5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        u = soup.find('bog-ccy-card', id='USD')
-        e = soup.find('bog-ccy-card', id='EUR')
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
         
-        # Online (Digital)
-        final_cache.append(format_entry("BOG", {
-            "usd_buy": u.get('buy-dgtl-rate'), "usd_sell": u.get('sell-dgtl-rate'),
-            "eur_buy": e.get('buy-dgtl-rate'), "eur_sell": e.get('sell-dgtl-rate')
-        }, True))
-        # Branch (Commercial)
-        final_cache.append(format_entry("BOG", {
-            "usd_buy": u.get('buy-rate'), "usd_sell": u.get('sell-rate'),
-            "eur_buy": e.get('buy-rate'), "eur_sell": e.get('sell-rate')
-        }, False))
-    except: pass
+        # Мгновенная замена (на уровне ОС это одна операция)
+        os.replace(temp_file, CACHE_FILE)
+        print(f"[{time.strftime('%H:%M:%S')}] Кэш успешно обновлен.")
+    except Exception as e:
+        print(f"Ошибка при записи кэша: {e}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
-    # --- 2. CREDO (Internet + Branch из твоего JSON) ---
-    try:
-        r = requests.get("https://credobank.ge/en/", headers=headers, timeout=5)
-        # Используем __NEXT_DATA__ для точности
-        data = json.loads(BeautifulSoup(r.text, 'html.parser').find('script', id='__NEXT_DATA__').string)
-        rates = data['props']['pageProps']['exchangeRates']
-        usd = next(i for i in rates if i['currency'] == 'USD')
-        eur = next(i for i in rates if i['currency'] == 'EUR')
-
-        # Online (Internet Bank)
-        final_cache.append(format_entry("CREDO", {
-            "usd_buy": usd['buyRateInternet'], "usd_sell": usd['sellRateInternet'],
-            "eur_buy": eur['buyRateInternet'], "eur_sell": eur['sellRateInternet']
-        }, True))
-        # Branch
-        final_cache.append(format_entry("CREDO", {
-            "usd_buy": usd['buyRate'], "usd_sell": usd['sellRate'],
-            "eur_buy": eur['buyRate'], "eur_sell": eur['sellRate']
-        }, False))
-    except: pass
-
-    # --- 3. LIBERTY (Online + Branch) ---
-    try:
-        r = requests.get("https://libertybank.ge/en/", headers=headers, timeout=5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        lib = {}
-        for c in ['USD', 'EUR']:
-            row = soup.find("span", string=c).find_parent(class_="js-homepage__currency-item")
-            items = row.find_all(class_="currency-rates__item")
-            lib[c] = {
-                "comm": {"buy": items[1].find_all("span")[0].text.strip(), "sell": items[1].find_all("span")[1].text.strip()},
-                "net": {"buy": items[2].find_all("span")[0].text.strip(), "sell": items[2].find_all("span")[1].text.strip()}
-            }
+def main_sync():
+    """Основной цикл парсинга (замени логику парсеров на свою)"""
+    print("ГАС запущен. Начинаю сбор данных...")
+    
+    while True:
+        final_results = []
         
-        final_cache.append(format_entry("LIBERTY", {
-            "usd_buy": lib['USD']['net']['buy'], "usd_sell": lib['USD']['net']['sell'],
-            "eur_buy": lib['EUR']['net']['buy'], "eur_sell": lib['EUR']['net']['sell']
-        }, True))
-        final_cache.append(format_entry("LIBERTY", {
-            "usd_buy": lib['USD']['comm']['buy'], "usd_sell": lib['USD']['comm']['sell'],
-            "eur_buy": lib['EUR']['comm']['buy'], "eur_sell": lib['EUR']['comm']['sell']
-        }, False))
-    except: pass
+        # --- ПРИМЕР: CREDO ---
+        try:
+            # Тут будет твой реальный парсинг (requests/beautifulsoup)
+            # Имитируем получение данных:
+            credo_online = make_standard_entry("CREDO", "2.691", "2.705", "3.054", "3.133", True)
+            credo_branch = make_standard_entry("CREDO", "2.685", "2.715", "3.040", "3.150", False)
+            final_results.extend([credo_online, credo_branch])
+        except Exception as e:
+            print(f"Ошибка парсинга CREDO: {e}")
 
-    # --- 4. TBC (Только Branch, онлайна пока нет) ---
-    try:
-        r = requests.get("https://tbcbank.ge/en/treasury-products", headers=headers, timeout=5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        rows = soup.find_all("div", class_="tbcx-pw-popular-currencies__row")
-        tbc_data = {}
-        for row in rows:
-            code = row.find("div", class_="tbcx-pw-currency-badge").text.strip()
-            vals = row.find_all("div", class_="tbcx-pw-popular-currencies__body")
-            if code in ['USD', 'EUR']:
-                tbc_data[code] = {"buy": vals[0].text.strip(), "sell": vals[1].text.strip()}
+        # --- ПРИМЕР: BOG ---
+        try:
+            bog_online = make_standard_entry("BOG", "2.670", "2.690", "3.010", "3.100", True)
+            final_results.append(bog_online)
+        except Exception as e:
+            print(f"Ошибка парсинга BOG: {e}")
+
+        # Сохраняем всё, что удалось собрать
+        if final_results:
+            save_cache_atomic(final_results)
         
-        final_cache.append(format_entry("TBC", {
-            "usd_buy": tbc_data['USD']['buy'], "usd_sell": tbc_data['USD']['sell'],
-            "eur_buy": tbc_data['EUR']['buy'], "eur_sell": tbc_data['EUR']['sell']
-        }, False))
-    except: pass
-
-    return final_cache
+        # Интервал обновления (например, раз в 15 минут)
+        print("Сплю 15 минут...")
+        time.sleep(900)
 
 if __name__ == "__main__":
-    # Этот JSON идет в кэш
-    print(json.dumps(get_all_rates(), indent=4))
+    main_sync()
