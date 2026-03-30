@@ -1,35 +1,60 @@
-# Универсальная функция для добавления данных в кэш
-def update_cache(name, rates, is_online=False):
-    if rates:
-        banks_cache[name] = {
-            'usd_buy': rates.get('usd_buy', '—'),
-            'usd_sell': rates.get('usd_sell', '—'),
-            'eur_buy': rates.get('eur_buy', '—'),
-            'eur_sell': rates.get('eur_sell', '—'),
-            'time': int(time.time() * 1000),
-            'is_online': is_online  # Тот самый ТЭГ
-        }
+import requests
+from bs4 import BeautifulSoup
 
-def parse_bog():
+def get_all_rates(target_currencies=['USD', 'EUR']):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    results = {}
+
+    # --- 1. Сбор данных с LIBERTY ---
     try:
-        url = "https://bankofgeorgia.ge/en/retail"
-        html = get_data(url)
+        r_lib = requests.get("https://libertybank.ge/en/", headers=headers, timeout=10)
+        soup_lib = BeautifulSoup(r_lib.text, 'html.parser')
         
-        # Регулярка для вытягивания всех 4 параметров из одного тега
-        pattern = r'id="USD".*?buy-rate="([0-9.]+)".*?sell-rate="([0-9.]+)".*?buy-dgtl-rate="([0-9.]+)".*?sell-dgtl-rate="([0-9.]+)"'
-        match = re.search(pattern, html)
+        for curr in target_currencies:
+            # Ищем строку с названием валюты (USD/EUR)
+            row = soup_lib.find("span", string=curr).find_parent(class_="js-homepage__currency-item")
+            items = row.find_all(class_="currency-rates__item")
+            
+            # По твоей структуре: индекс [1] - Commercial, [2] - Internet Bank
+            comm = items[1].find_all("span", class_="currency-rates__currency")
+            net = items[2].find_all("span", class_="currency-rates__currency")
+            
+            results[f'liberty_{curr}'] = {
+                "branch": {"buy": comm[0].text.strip(), "sell": comm[1].text.strip()},
+                "online": {"buy": net[0].text.strip(), "sell": net[1].text.strip()}
+            }
+    except:
+        pass
+
+    # --- 2. Сбор данных с BOG ---
+    try:
+        r_bog = requests.get("https://bog.ge/en/personal/currencys", headers=headers, timeout=10)
+        soup_bog = BeautifulSoup(r_bog.text, 'html.parser')
         
-        if match:
-            # Наличный курс
-            update_cache("Bank of Georgia", {
-                'usd_buy': match.group(1), 'usd_sell': match.group(2)
-            }, is_online=False)
-            
-            # Онлайн курс
-            update_cache("BoG Online", {
-                'usd_buy': match.group(3), 'usd_sell': match.group(4)
-            }, is_online=True)
-            
-            print("✅ BoG Split: Branch & Online updated")
-    except Exception as e:
-        print(f"BOG error: {e}")
+        for curr in target_currencies:
+            # Ищем кастомный тег bog-ccy-card с нужным ID
+            card = soup_bog.find('bog-ccy-card', id=curr)
+            if card:
+                results[f'bog_{curr}'] = {
+                    "branch": {"buy": card.get('buy-rate'), "sell": card.get('sell-rate')},
+                    "online": {"buy": card.get('buy-dgtl-rate'), "sell": card.get('sell-dgtl-rate')}
+                }
+    except:
+        pass
+
+    return results
+
+if __name__ == "__main__":
+    rates = get_all_rates(['USD', 'EUR'])
+    
+    for c in ['USD', 'EUR']:
+        print(f"\n📈 КУРС {c}:")
+        print(f"{'Банк':<15} | {'Тип':<10} | {'Покупка':<8} | {'Продажа':<8}")
+        print("-" * 50)
+        for bank in ['liberty', 'bog']:
+            data = rates.get(f'{bank}_{c}')
+            if data:
+                print(f"{bank.upper():<15} | Branch     | {data['branch']['buy']:<8} | {data['branch']['sell']:<8}")
+                print(f"{'':<15} | Online     | {data['online']['buy']:<8} | {data['online']['sell']:<8}")
