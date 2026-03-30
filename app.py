@@ -7,16 +7,16 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# Хранилище данных (кэш)
+# Наш "холодильник" (кэш)
 cache = {
     "usd_buy": "0.00",
     "usd_sell": "0.00",
     "eur_buy": "0.00",
     "eur_sell": "0.00",
-    "last_update": "never"
+    "last_update": "never"  # Это поле критически важно для цвета во Flutter!
 }
 
-# Твоя ссылка на Koyeb (нужна для самопрозвона)
+# Твоя ссылка на Koyeb для самопрозвона
 SELF_URL = "https://easy-riki-renamed-user-0229-754c8027.koyeb.app/"
 
 def get_rico_rates():
@@ -47,36 +47,39 @@ def get_rico_rates():
         return None
 
 def background_worker():
-    """Фоновый поток: обновляет кэш и не дает серверу уснуть"""
+    """Фоновый поток: обновляет данные и делает самопрозвон"""
     while True:
-        # 1. Обновляем данные из Rico
+        # 1. Пробуем обновить кэш
         newData = get_rico_rates()
         if newData:
             cache.update(newData)
-            cache["last_update"] = time.strftime("%H:%M:%S")
-            print(f"[{cache['last_update']}] Кэш обновлен")
+            # Записываем время в формате ЧЧ:ММ (по Грузии)
+            # Так как сервер может быть в другом часовом поясе, 
+            # берем текущее время и приводим к нужному виду
+            t = time.gmtime(time.time() + 4 * 3600) # UTC + 4 часа
+            cache["last_update"] = time.strftime("%H:%M", t)
+            print(f"[{cache['last_update']}] Rico кэш обновлен")
         
-        # 2. Функция автопросыпания (Self-Ping)
+        # 2. Не даем серверу уснуть (Self-ping)
         try:
-            requests.get(SELF_URL)
-            print("Self-ping выполнен удачно")
+            requests.get(SELF_URL, timeout=10)
         except:
-            print("Self-ping не удался (возможно, сервер еще грузится)")
+            pass
 
-        # Спим 20 минут (1200 секунд) - этого хватит, чтобы Koyeb не заснул
+        # Спим 20 минут
         time.sleep(1200)
 
-# Запуск фонового процесса
+# Запуск фонового потока
 threading.Thread(target=background_worker, daemon=True).start()
 
 @app.route('/rates')
 def rates_endpoint():
-    # Отдает данные мгновенно из кэша
+    # Отдаем кэш. Теперь там есть "last_update"
     return jsonify(cache)
 
 @app.route('/')
 def home():
-    return f"Server is active. Last cache update: {cache['last_update']}"
+    return f"Rico Service Active. Last update: {cache['last_update']}"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
