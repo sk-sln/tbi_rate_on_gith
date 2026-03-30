@@ -7,13 +7,14 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# Наш "холодильник" (кэш)
+# Наш "холодильник" (кэш). 
+# Теперь last_update по умолчанию 0 (число).
 cache = {
     "usd_buy": "0.00",
     "usd_sell": "0.00",
     "eur_buy": "0.00",
     "eur_sell": "0.00",
-    "last_update": "never"  # Это поле критически важно для цвета во Flutter!
+    "last_update": 0  
 }
 
 # Твоя ссылка на Koyeb для самопрозвона
@@ -53,12 +54,10 @@ def background_worker():
         newData = get_rico_rates()
         if newData:
             cache.update(newData)
-            # Записываем время в формате ЧЧ:ММ (по Грузии)
-            # Так как сервер может быть в другом часовом поясе, 
-            # берем текущее время и приводим к нужному виду
-            t = time.gmtime(time.time() + 4 * 3600) # UTC + 4 часа
-            cache["last_update"] = time.strftime("%H:%M", t)
-            print(f"[{cache['last_update']}] Rico кэш обновлен")
+            # Записываем время в МИЛЛИСЕКУНДАХ (Unix Timestamp)
+            # time.time() дает секунды, умножаем на 1000 для Flutter
+            cache["last_update"] = int(time.time() * 1000)
+            print(f"Rico кэш обновлен. Timestamp: {cache['last_update']}")
         
         # 2. Не даем серверу уснуть (Self-ping)
         try:
@@ -66,7 +65,7 @@ def background_worker():
         except:
             pass
 
-        # Спим 20 минут
+        # Спим 20 минут (1200 секунд)
         time.sleep(1200)
 
 # Запуск фонового потока
@@ -74,12 +73,12 @@ threading.Thread(target=background_worker, daemon=True).start()
 
 @app.route('/rates')
 def rates_endpoint():
-    # Отдаем кэш. Теперь там есть "last_update"
+    # Отдаем кэш. Теперь там число в last_update
     return jsonify(cache)
 
 @app.route('/')
 def home():
-    return f"Rico Service Active. Last update: {cache['last_update']}"
+    return f"Rico Service Active. Last timestamp: {cache['last_update']}"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
