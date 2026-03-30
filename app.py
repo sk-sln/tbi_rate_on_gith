@@ -3,9 +3,23 @@ from bs4 import BeautifulSoup
 import time
 import json
 from datetime import datetime
+from flask import Flask
+from threading import Thread
+
+# --- ИНИЦИАЛИЗАЦИЯ ВЕБ-СЕРВЕРА ДЛЯ KOYEB ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    # Эта страница будет открываться, когда ГАС или ты сам заходите по ссылке
+    return f"Parser is active. Last internal check: {datetime.now().strftime('%H:%M:%S')}"
+
+def run_web():
+    # Порт 8080 обязателен для Koyeb Health Check
+    app.run(host='0.0.0.0', port=8080)
 
 # --- НАСТРОЙКИ ---
-# Вставь сюда URL, полученный после Deploy в Google Apps Script
+# ВАЖНО: Проверь, что это последняя ссылка из Deploy в GAS
 GAS_URL = "https://script.google.com/macros/s/XXXXXXXXX/exec" 
 
 HEADERS = {
@@ -13,26 +27,23 @@ HEADERS = {
 }
 
 def get_now_ms():
-    """Возвращает текущее время в миллисекундах (стандарт 1970 года)"""
     return int(time.time() * 1000)
 
 def clean_val(val):
-    """Очистка строк и замена запятых на точки"""
     if not val: return "0.00"
     return str(val).strip().replace(',', '.')
 
-# --- ПАРСЕРЫ ---
+# --- ПАРСЕРЫ (TBC, BOG, Credo, Liberty) ---
 
 def get_tbc():
     try:
         r = requests.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         rows = soup.find_all('div', class_='exchange-table__row')
-        
         now = get_now_ms()
+        res = []
         branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
         online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
-        
         for row in rows:
             cols = row.find_all('div', class_='exchange-table__col')
             txt = row.text.upper()
@@ -52,7 +63,6 @@ def get_bog():
         now = get_now_ms()
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
         online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
-        
         for item in data:
             if item['code'] == 'USD':
                 branch.update({"usd_buy": item['buyRate'], "usd_sell": item['sellRate']})
@@ -70,9 +80,7 @@ def get_credo():
         usd = soup.find('tr', {'data-currency': 'USD'}).find_all('td')
         eur = soup.find('tr', {'data-currency': 'EUR'}).find_all('td')
         return [{
-            "bank": "Credo Bank", 
-            "is_online": False, 
-            "updated_at_ms": get_now_ms(),
+            "bank": "Credo Bank", "is_online": False, "updated_at_ms": get_now_ms(),
             "usd_buy": usd[1].text, "usd_sell": usd[2].text,
             "eur_buy": eur[1].text, "eur_sell": eur[2].text
         }]
@@ -94,46 +102,46 @@ def get_liberty():
 
 # --- ОСНОВНОЙ ЦИКЛ ---
 
-def main():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Парсер запущен (Тактика: Индивидуальные метки).")
-    
-    # Инициализируем локальный кэш, чтобы при сбое банка не слать пустой список
-    # Это позволит сохранять старые данные в ГАС, пока они не обновятся
+def parser_loop():
     master_cache = {} 
-
     while True:
-        parsers = [get_tbc, get_bog, get_credo, get_liberty]
+        print(f"--- НАЧАЛО КРУГА ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
+        parsers = [get_tbc, get_bog, get_credo, get_liberty]
         for parse_func in parsers:
             try:
                 data_list = parse_func()
                 if data_list:
                     for entry in data_list:
-                        # Чистим данные
+                        # Чистка данных
                         for k in ["usd_buy", "usd_sell", "eur_buy", "eur_sell"]:
                             if k in entry: entry[k] = clean_val(entry[k])
                         
-                        # Ключ для кэша (Название + тип), чтобы обновлять записи точечно
-                        cache_key = f"{entry['bank']}_{entry['is_online']}"
-                        master_cache[cache_key] = entry
-                    
-                    print(f"Успешно: {data_list[0]['bank']}")
+                        # Ключ для master_cache (индивидуальное обновление)
+                        key = f"{entry['bank']}_{entry['is_online']}"
+                        master_cache[key] = entry
+                    print(f"  [+] {data_list[0]['bank']} успешно обработан.")
             except Exception as e:
-                print(f"Ошибка парсинга: {e}")
+                print(f"  [!] Ошибка в {parse_func.__name__}: {e}")
             
-            time.sleep(10) # Пауза 10 сек
-        
-        # Отправляем весь накопленный кэш в ГАС
+            time.sleep(10) # Пауза между запросами к разным банкам
+
+        # Отправка накопленного кэша в ГАС
         if master_cache:
             try:
                 payload = list(master_cache.values())
                 requests.post(GAS_URL, json=payload, timeout=30)
-                print(f"Пакет из {len(payload)} записей отправлен в ГАС.")
+                print(f"--- ПАКЕТ ОТПРАВЛЕН В ГАС ({len(payload)} зап.) ---")
             except Exception as e:
-                print(f"Ошибка POST: {e}")
+                print(f"--- ОШИБКА POST: {e} ---")
 
-        print(f"Сплю 14 минут...")
+        # ИНТЕРВАЛ 14 МИНУТ (840 секунд)
+        print(f"Ожидание следующего круга: 14 минут... (до {datetime.fromtimestamp(time.time()+840).strftime('%H:%M:%S')})")
         time.sleep(840)
 
 if __name__ == "__main__":
-    main()
+    # Запуск веб-сервера для Koyeb Health Check
+    Thread(target=run_web).start()
+    
+    # Запуск парсера
+    parser_loop()
