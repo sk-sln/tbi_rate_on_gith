@@ -44,6 +44,51 @@ def get_all_rates(target_currencies=['USD', 'EUR']):
     except:
         pass
 
+
+import requests
+from bs4 import BeautifulSoup
+
+def get_tbc_rates(target_currencies=['USD', 'EUR']):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    url = "https://tbcbank.ge/en/treasury-products" # Базовый URL
+    results = {}
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        
+        # Находим контейнер со всеми валютами
+        rows = soup.find_all("div", class_="tbcx-pw-popular-currencies__row")
+        
+        for row in rows:
+            # Извлекаем название валюты (USD, EUR...)
+            curr_name = row.find("div", class_="tbcx-pw-currency-badge").text.strip()
+            
+            if curr_name in target_currencies:
+                # Ищем блоки с Buy и Sell
+                # В структуре TBC значения лежат в class_="tbcx-pw-popular-currencies__body"
+                values = row.find_all("div", class_="tbcx-pw-popular-currencies__body")
+                
+                if len(values) >= 2:
+                    results[f'tbc_{curr_name}'] = {
+                        "branch": {
+                            "buy": values[0].text.strip(), 
+                            "sell": values[1].text.strip()
+                        }
+                    }
+    except Exception as e:
+        print(f"Ошибка TBC: {e}")
+        
+    return results
+
+# Пример вывода:
+# rates = get_tbc_rates(['USD', 'EUR'])
+# print(rates['tbc_USD']['branch']['buy']) -> '2.645'
+
+    
+
     return results
 
 if __name__ == "__main__":
