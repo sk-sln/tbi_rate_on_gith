@@ -6,7 +6,7 @@ from flask import Flask
 from threading import Thread
 
 # --- НАСТРОЙКИ ---
-# ВАЖНО: Вставь сюда свой актуальный URL из Google Apps Script (Web App)
+# Твой актуальный URL из Google Apps Script (Web App) [cite: 3, 12]
 GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
 
 HEADERS = {
@@ -14,6 +14,7 @@ HEADERS = {
 }
 
 def get_now_ms():
+    # Возвращаем Unix Timestamp в миллисекундах [cite: 7, 10]
     return int(time.time() * 1000)
 
 def clean_val(val):
@@ -30,21 +31,34 @@ def get_tbc():
         now = get_now_ms()
         branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
         online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
+        found = False
         for row in rows:
             cols = row.find_all('div', class_='exchange-table__col')
             txt = row.text.upper()
             if 'USD' in txt and len(cols) >= 5:
                 branch.update({"usd_buy": cols[1].text, "usd_sell": cols[2].text})
                 online.update({"usd_buy": cols[3].text, "usd_sell": cols[4].text})
+                found = True
             if 'EUR' in txt and len(cols) >= 5:
                 branch.update({"eur_buy": cols[1].text, "eur_sell": cols[2].text})
                 online.update({"eur_buy": cols[3].text, "eur_sell": cols[4].text})
-        return [branch, online]
-    except: return []
+                found = True
+        return [branch, online] if found else []
+    except Exception as e:
+        print(f"  [!] Ошибка TBC: {e}")
+        return []
 
 def get_bog():
     try:
-        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=HEADERS, timeout=15)
+        # Добавляем Referer, чтобы API банка нас не блокировало 
+        bog_headers = HEADERS.copy()
+        bog_headers.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
+        
+        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=bog_headers, timeout=15)
+        if r.status_code != 200:
+            print(f"  [!] BOG API вернул статус: {r.status_code}")
+            return []
+            
         data = r.json()
         now = get_now_ms()
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
@@ -57,44 +71,68 @@ def get_bog():
                 branch.update({"eur_buy": item['buyRate'], "eur_sell": item['sellRate']})
                 online.update({"eur_buy": item.get('buyRateApp', item['buyRate']), "eur_sell": item.get('sellRateApp', item['sellRate'])})
         return [branch, online]
-    except: return []
+    except Exception as e:
+        print(f"  [!] Ошибка BOG: {e}")
+        return []
 
 def get_credo():
     try:
         r = requests.get("https://credobank.ge/en/rates/", headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
-        usd = soup.find('tr', {'data-currency': 'USD'}).find_all('td')
-        eur = soup.find('tr', {'data-currency': 'EUR'}).find_all('td')
+        # Ищем строки по data-атрибутам, как в паспорте 
+        usd_row = soup.find('tr', {'data-currency': 'USD'})
+        eur_row = soup.find('tr', {'data-currency': 'EUR'})
+        
+        if not usd_row or not eur_row:
+            return []
+            
+        usd = usd_row.find_all('td')
+        eur = eur_row.find_all('td')
+        
         return [{
             "bank": "Credo Bank", "is_online": False, "updated_at_ms": get_now_ms(),
             "usd_buy": usd[1].text, "usd_sell": usd[2].text,
             "eur_buy": eur[1].text, "eur_sell": eur[2].text
         }]
-    except: return []
+    except Exception as e:
+        print(f"  [!] Ошибка Credo: {e}")
+        return []
 
 def get_liberty():
     try:
         r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, 'html.parser')
         res = {"bank": "Liberty Bank", "is_online": False, "updated_at_ms": get_now_ms()}
+        # Контейнеры currency-item из паспорта 
         items = soup.find_all('div', class_='currency-item')
+        found = False
         for item in items:
-            code = item.find('div', class_='currency-code').text.strip()
+            code_el = item.find('div', class_='currency-code')
+            if not code_el: continue
+            code = code_el.text.strip()
             vals = item.find_all('div', class_='currency-value')
-            if code == 'USD': res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
-            if code == 'EUR': res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
-        return [res]
-    except: return []
+            if len(vals) < 2: continue
+            
+            if code == 'USD': 
+                res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
+                found = True
+            if code == 'EUR': 
+                res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
+                found = True
+        return [res] if found else []
+    except Exception as e:
+        print(f"  [!] Ошибка Liberty: {e}")
+        return []
 
 # --- ОСНОВНОЙ ЦИКЛ ПАРСИНГА ---
 def parser_loop():
     master_cache = {} 
-    # Ждем 5 секунд перед первым запуском, чтобы Gunicorn успел полностью загрузиться
     time.sleep(5)
     
     while True:
         print(f"--- НАЧАЛО КРУГА ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
+        # Список всех 4-х настроенных банков [cite: 13, 14, 17]
         parsers = [get_tbc, get_bog, get_credo, get_liberty]
         for parse_func in parsers:
             try:
@@ -105,9 +143,11 @@ def parser_loop():
                             if k in entry: entry[k] = clean_val(entry[k])
                         key = f"{entry['bank']}_{entry['is_online']}"
                         master_cache[key] = entry
-                    print(f"  [+] {data_list[0]['bank']} успешно обработан.")
+                    print(f"  [+] {parse_func.__name__} успешно обработан.")
+                else:
+                    print(f"  [-] {parse_func.__name__} вернул ПУСТОЙ список.")
             except Exception as e:
-                print(f"  [!] Ошибка в {parse_func.__name__}: {e}")
+                print(f"  [!] Критическая ошибка в {parse_func.__name__}: {e}")
             
             time.sleep(10)
 
@@ -119,6 +159,7 @@ def parser_loop():
             except Exception as e:
                 print(f"--- ОШИБКА POST: {e} ---")
 
+        # Цикл 14 минут для лимитов [cite: 10, 11]
         print(f"Сплю 14 минут... (до {datetime.fromtimestamp(time.time()+840).strftime('%H:%M:%S')})")
         time.sleep(840)
 
@@ -129,8 +170,7 @@ app = Flask('')
 def home():
     return f"Currency Parser is Active. Server time: {datetime.now().strftime('%H:%M:%S')}"
 
-# ГЛАВНЫЙ ФИКС: Запускаем парсер как демонический поток прямо здесь, 
-# чтобы Gunicorn активировал его при загрузке файла app.py
+# Запуск парсера как демонического потока [cite: 2]
 bg_thread = Thread(target=parser_loop, daemon=True)
 bg_thread.start()
 
