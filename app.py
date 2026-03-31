@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import time
+import random
 from datetime import datetime
 from flask import Flask
 from threading import Thread
