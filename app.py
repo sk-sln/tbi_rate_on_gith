@@ -120,7 +120,7 @@ def get_rico():
 
 # --- ЦИКЛ ПАРСИНГА ---
 def parser_loop():
-    time.sleep(45) # Защита от нестабильности сети Koyeb при старте
+    time.sleep(90) # Защита от нестабильности сети Koyeb при старте
     while True:
         master_cache = {}
         print(f"--- ЦИКЛ ПАРСИНГА СТАРТ: {datetime.now().strftime('%H:%M:%S')} ---")
