@@ -45,15 +45,19 @@ def get_error_placeholder(bank_name, is_online=False):
 
 def get_tbc():
     try:
+        # 1. Формируем заголовки, максимально имитирующие реальный браузер
         api_headers = HEADERS.copy()
         api_headers.update({
             "Referer": "https://www.tbcbank.ge/",
             "Origin": "https://www.tbcbank.ge",
             "Accept": "application/json, text/plain, */*",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
         })
         
         api_url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
         
+        # 2. Используем сессию для сохранения cookies (важно для обхода некоторых защит)
         session = requests.Session()
         r = session.get(api_url, headers=api_headers, timeout=20)
         
@@ -61,32 +65,50 @@ def get_tbc():
             print(f"[-] TBC API error: {r.status_code}")
             return [get_error_placeholder("TBC Bank", False)]
         
-        data = r.json()
+        raw_data = r.json()
         
-        # --- ПРОВЕРКА НА ТИП ДАННЫХ (Защита от 'str' object error) ---
-        if not isinstance(data, list):
-            print(f"[-] TBC API вернул не список, а: {type(data)}")
+        # 3. ДИАГНОСТИКА И ОБРАБОТКА ФОРМАТА
+        # Если пришел словарь (dict), пытаемся найти список внутри него
+        if isinstance(raw_data, dict):
+            print(f"[!] TBC API вернул СЛОВАРЬ. Пытаемся извлечь данные... Содержимое: {raw_data}")
+            
+            # Проверяем типичные ключи, где может лежать список курсов
+            if 'data' in raw_data and isinstance(raw_data['data'], list):
+                data_list = raw_data['data']
+            elif 'rates' in raw_data and isinstance(raw_data['rates'], list):
+                data_list = raw_data['rates']
+            elif 'commercialRates' in raw_data and isinstance(raw_data['commercialRates'], list):
+                data_list = raw_data['commercialRates']
+            else:
+                # Если это просто словарь с ошибкой или другой структурой
+                print("[-] Не удалось найти список курсов внутри словаря.")
+                return [get_error_placeholder("TBC Bank", False)]
+        elif isinstance(raw_data, list):
+            data_list = raw_data
+        else:
+            print(f"[-] TBC API: Неизвестный тип данных {type(raw_data)}")
             return [get_error_placeholder("TBC Bank", False)]
-        # -------------------------------------------------------------
 
+        # 4. ОБРАБОТКА СПИСКА КУРСОВ
         now = get_now_ms()
         branch = create_record("TBC Bank", False, now)
 
-        for item in data:
-            # Теперь мы уверены, что item — это словарь
-            if isinstance(item, dict):
-                curr = item.get('currency')
-                if curr == 'USD':
-                    branch["usd_buy"] = clean_val(item.get('buyCommercial'))
-                    branch["usd_sell"] = clean_val(item.get('sellCommercial'))
-                elif curr == 'EUR':
-                    branch["eur_buy"] = clean_val(item.get('buyCommercial'))
-                    branch["eur_sell"] = clean_val(item.get('sellCommercial'))
+        for item in data_list:
+            if not isinstance(item, dict): continue
+            
+            curr = item.get('currency')
+            if curr == 'USD':
+                branch["usd_buy"] = clean_val(item.get('buyCommercial'))
+                branch["usd_sell"] = clean_val(item.get('sellCommercial'))
+            elif curr == 'EUR':
+                branch["eur_buy"] = clean_val(item.get('buyCommercial'))
+                branch["eur_sell"] = clean_val(item.get('sellCommercial'))
 
+        print(f"[+] TBC API успешно обработан: {branch['usd_buy']}/{branch['usd_sell']}")
         return [branch]
         
     except Exception as e:
-        print(f"[-] Ошибка TBC API: {e}")
+        print(f"[-] Критическая ошибка в get_tbc: {e}")
         return [get_error_placeholder("TBC Bank", False)]
 
 
