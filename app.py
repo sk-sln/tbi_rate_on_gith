@@ -65,23 +65,33 @@ def get_tbc():
         return None
 
 def get_bog():
+    """Парсер Bank of Georgia согласно разделу 4 Паспорта"""
     try:
         h = HEADERS.copy()
         h.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
+        # API из паспорта
         r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
-        data = r.json()
-        items = data if isinstance(data, list) else data.get('currencies', [])
-        now = get_now_ms()
+        items = r.json()
+        now = get_now_ms() # Int (Unix ms) по разделу 2
+        
+        # Разделяем на филиал и приложение по полю is_online (Bool)
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
         online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
+        
         for i in items:
             c = i.get('code')
-            if c in ['USD', 'EUR']:
-                suffix = 'usd' if c == 'USD' else 'eur'
-                branch.update({f"{suffix}_buy": i.get('buyRate'), f"{suffix}_sell": i.get('sellRate')})
-                online.update({f"{suffix}_buy": i.get('buyRateApp', i.get('buyRate')), f"{suffix}_sell": i.get('sellRateApp', i.get('sellRate'))})
+            if c == 'USD':
+                # Строго usd_buy / usd_sell (String)
+                branch.update({"usd_buy": clean_val(i.get('buy')), "usd_sell": clean_val(i.get('sell'))})
+                online.update({"usd_buy": clean_val(i.get('buyApp')), "usd_sell": clean_val(i.get('sellApp'))})
+            elif c == 'EUR':
+                branch.update({"eur_buy": clean_val(i.get('buy')), "eur_sell": clean_val(i.get('sell'))})
+                online.update({"eur_buy": clean_val(i.get('buyApp')), "eur_sell": clean_val(i.get('sellApp'))})
+        
         return [branch, online]
-    except: return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
+    except Exception as e:
+        print(f"[-] Ошибка BoG: {e}")
+        return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
 def get_credo():
     session = requests.Session()
@@ -107,17 +117,31 @@ def get_credo():
         return None
 
 def get_liberty():
+    """Парсер Liberty Bank согласно разделу 4 Паспорта"""
     try:
         r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
-        res = {"bank": "Liberty Bank", "is_online": False, "updated_at_ms": get_now_ms()}
-        for item in soup.find_all('div', class_='currency-item'):
-            code = item.find('div', class_='currency-code').text.strip()
+        now = get_now_ms()
+        res = {"bank": "Liberty Bank", "is_online": False, "updated_at_ms": now}
+        
+        # По паспорту: поиск по контейнерам currency-item
+        items = soup.find_all('div', class_='currency-item')
+        for item in items:
+            code_div = item.find('div', class_='currency-code')
+            if not code_div: continue
+            code = code_div.text.strip()
             vals = item.find_all('div', class_='currency-value')
-            if 'USD' in code: res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
-            if 'EUR' in code: res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
+            
+            if len(vals) >= 2:
+                if 'USD' in code:
+                    res.update({"usd_buy": clean_val(vals[0].text), "usd_sell": clean_val(vals[1].text)})
+                elif 'EUR' in code:
+                    res.update({"eur_buy": clean_val(vals[0].text), "eur_sell": clean_val(vals[1].text)})
+        
         return [res]
-    except: return [get_error_placeholder("Liberty Bank", False)]
+    except Exception as e:
+        print(f"[-] Ошибка Liberty: {e}")
+        return [get_error_placeholder("Liberty Bank", False)]
 
 def get_rico():
     """Парсер Rico Credit на основе предоставленного HTML-кода"""
