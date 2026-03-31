@@ -33,25 +33,35 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_tbc():
+    session = requests.Session()
+    # Имитируем реальные заголовки браузера
+    browser_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,/ ;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.google.com/', # Типа пришли из поиска
+        'Connection': 'keep-alive',
+    }
+    
     try:
-        r = requests.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=HEADERS, timeout=25)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        rows = soup.find_all('div', class_='exchange-table__row')
-        now = get_now_ms()
-        res = []
-        found = False
-        for row in rows:
-            cols = row.find_all('div', class_='exchange-table__col')
-            if 'USD' in row.text.upper() and len(cols) >= 5:
-                res.append({"bank": "TBC Bank", "is_online": False, "usd_buy": cols[1].text, "usd_sell": cols[2].text, "updated_at_ms": now})
-                res.append({"bank": "TBC Bank", "is_online": True, "usd_buy": cols[3].text, "usd_sell": cols[4].text, "updated_at_ms": now})
-                found = True
-            if 'EUR' in row.text.upper() and len(cols) >= 5:
-                for item in res:
-                    if not item["is_online"]: item.update({"eur_buy": cols[1].text, "eur_sell": cols[2].text})
-                    else: item.update({"eur_buy": cols[3].text, "eur_sell": cols[4].text})
-        return res if found else [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
-    except: return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
+        # ШАГ 1: Заходим на главную, чтобы получить куки безопасности
+        session.get("https://www.tbcbank.ge/web/en", headers=browser_headers, timeout=20)
+        time.sleep(random.uniform(2, 4)) # Случайная пауза, как у человека
+        
+        # ШАГ 2: Идем за курсами
+        r = session.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=browser_headers, timeout=25)
+        
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            # Твой текущий код поиска значений в soup...
+            # (Оставь логику извлечения данных, которую мы писали ранее)
+            return data
+        else:
+            print(f"[-] TBC вернул статус {r.status_code}")
+            return None
+    except Exception as e:
+        print(f"[-] Ошибка TBC: {e}")
+        return None
 
 def get_bog():
     try:
@@ -73,13 +83,27 @@ def get_bog():
     except: return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
 def get_credo():
+    session = requests.Session()
+    browser_headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept-Language': 'ka,en-US;q=0.7,en;q=0.3',
+    }
+    
     try:
-        r = requests.get("https://credobank.ge/en/rates/", headers=HEADERS, timeout=25)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        u = soup.find('tr', {'data-currency': 'USD'}).find_all('td')
-        e = soup.find('tr', {'data-currency': 'EUR'}).find_all('td')
-        return [{"bank": "Credo Bank", "is_online": False, "updated_at_ms": get_now_ms(), "usd_buy": u[1].text, "usd_sell": u[2].text, "eur_buy": e[1].text, "eur_sell": e[2].text}]
-    except: return [get_error_placeholder("Credo Bank", False)]
+        # Сначала "прогреваем" сессию на главной
+        session.get("https://credobank.ge/en/", headers=browser_headers, timeout=20)
+        time.sleep(random.uniform(3, 5))
+        
+        # Запрашиваем страницу с курсами
+        r = session.get("https://credobank.ge/en/exchange-rates/", headers=browser_headers, timeout=25)
+        
+        if r.status_code == 200:
+            # Твоя логика поиска в soup...
+            return data
+        return None
+    except Exception as e:
+        print(f"[-] Ошибка Credo: {e}")
+        return None
 
 def get_liberty():
     try:
