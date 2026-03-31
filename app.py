@@ -6,26 +6,25 @@ from flask import Flask
 from threading import Thread
 
 # --- НАСТРОЙКИ ---
-# Твой актуальный URL из Google Apps Script (Web App) [cite: 3, 12]
 GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
 }
 
 def get_now_ms():
-    # Возвращаем Unix Timestamp в миллисекундах [cite: 7, 10]
     return int(time.time() * 1000)
 
 def clean_val(val):
-    if not val: return "0.00"
+    if val is None: return "0.00"
     return str(val).strip().replace(',', '.')
 
 # --- ПАРСЕРЫ ---
 
 def get_tbc():
     try:
-        r = requests.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=HEADERS, timeout=15)
+        r = requests.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=HEADERS, timeout=20)
         soup = BeautifulSoup(r.text, 'html.parser')
         rows = soup.find_all('div', class_='exchange-table__row')
         now = get_now_ms()
@@ -50,41 +49,58 @@ def get_tbc():
 
 def get_bog():
     try:
-        # Добавляем Referer, чтобы API банка нас не блокировало 
         bog_headers = HEADERS.copy()
-        bog_headers.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
+        bog_headers.update({
+            "Referer": "https://bankofgeorgia.ge/en/main/currencies",
+            "Accept": "application/json, text/plain, */*"
+        })
         
-        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=bog_headers, timeout=15)
+        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=bog_headers, timeout=20)
         if r.status_code != 200:
-            print(f"  [!] BOG API вернул статус: {r.status_code}")
+            print(f"  [!] BOG API статус: {r.status_code}")
             return []
             
         data = r.json()
+        
+        # ФИКС: Обработка структуры данных (список или словарь с ключом)
+        items_list = []
+        if isinstance(data, list):
+            items_list = data
+        elif isinstance(data, dict):
+            items_list = data.get('currencies', [data])
+
         now = get_now_ms()
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
         online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
-        for item in data:
-            if item['code'] == 'USD':
-                branch.update({"usd_buy": item['buyRate'], "usd_sell": item['sellRate']})
-                online.update({"usd_buy": item.get('buyRateApp', item['buyRate']), "usd_sell": item.get('sellRateApp', item['sellRate'])})
-            if item['code'] == 'EUR':
-                branch.update({"eur_buy": item['buyRate'], "eur_sell": item['sellRate']})
-                online.update({"eur_buy": item.get('buyRateApp', item['buyRate']), "eur_sell": item.get('sellRateApp', item['sellRate'])})
-        return [branch, online]
+        
+        found = False
+        for item in items_list:
+            if not isinstance(item, dict) or 'code' not in item: continue
+            
+            code = item.get('code')
+            if code == 'USD':
+                branch.update({"usd_buy": item.get('buyRate'), "usd_sell": item.get('sellRate')})
+                online.update({"usd_buy": item.get('buyRateApp', item.get('buyRate')), 
+                               "usd_sell": item.get('sellRateApp', item.get('sellRate'))})
+                found = True
+            elif code == 'EUR':
+                branch.update({"eur_buy": item.get('buyRate'), "eur_sell": item.get('sellRate')})
+                online.update({"eur_buy": item.get('buyRateApp', item.get('buyRate')), 
+                               "eur_sell": item.get('sellRateApp', item.get('sellRate'))})
+                found = True
+        return [branch, online] if found else []
     except Exception as e:
         print(f"  [!] Ошибка BOG: {e}")
         return []
 
 def get_credo():
     try:
-        r = requests.get("https://credobank.ge/en/rates/", headers=HEADERS, timeout=15)
+        r = requests.get("https://credobank.ge/en/rates/", headers=HEADERS, timeout=20)
         soup = BeautifulSoup(r.text, 'html.parser')
-        # Ищем строки по data-атрибутам, как в паспорте 
         usd_row = soup.find('tr', {'data-currency': 'USD'})
         eur_row = soup.find('tr', {'data-currency': 'EUR'})
         
-        if not usd_row or not eur_row:
-            return []
+        if not usd_row or not eur_row: return []
             
         usd = usd_row.find_all('td')
         eur = eur_row.find_all('td')
@@ -100,10 +116,9 @@ def get_credo():
 
 def get_liberty():
     try:
-        r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=15)
+        r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=20)
         soup = BeautifulSoup(r.text, 'html.parser')
         res = {"bank": "Liberty Bank", "is_online": False, "updated_at_ms": get_now_ms()}
-        # Контейнеры currency-item из паспорта 
         items = soup.find_all('div', class_='currency-item')
         found = False
         for item in items:
@@ -113,10 +128,10 @@ def get_liberty():
             vals = item.find_all('div', class_='currency-value')
             if len(vals) < 2: continue
             
-            if code == 'USD': 
+            if 'USD' in code: 
                 res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
                 found = True
-            if code == 'EUR': 
+            if 'EUR' in code: 
                 res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
                 found = True
         return [res] if found else []
@@ -127,12 +142,12 @@ def get_liberty():
 # --- ОСНОВНОЙ ЦИКЛ ПАРСИНГА ---
 def parser_loop():
     master_cache = {} 
-    time.sleep(5)
+    # Ждем 15 секунд, чтобы сервер полностью "прогрелся" после деплоя/пробуждения
+    time.sleep(15)
     
     while True:
         print(f"--- НАЧАЛО КРУГА ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
-        # Список всех 4-х настроенных банков [cite: 13, 14, 17]
         parsers = [get_tbc, get_bog, get_credo, get_liberty]
         for parse_func in parsers:
             try:
@@ -149,7 +164,7 @@ def parser_loop():
             except Exception as e:
                 print(f"  [!] Критическая ошибка в {parse_func.__name__}: {e}")
             
-            time.sleep(10)
+            time.sleep(10) # Пауза между банками для обхода защиты
 
         if master_cache:
             try:
@@ -159,18 +174,16 @@ def parser_loop():
             except Exception as e:
                 print(f"--- ОШИБКА POST: {e} ---")
 
-        # Цикл 14 минут для лимитов [cite: 10, 11]
         print(f"Сплю 14 минут... (до {datetime.fromtimestamp(time.time()+840).strftime('%H:%M:%S')})")
         time.sleep(840)
 
-# --- ИНИЦИАЛИЗАЦИЯ FLASK И ЗАПУСК ПОТОКА ---
+# --- FLASK ---
 app = Flask('')
 
 @app.route('/')
 def home():
     return f"Currency Parser is Active. Server time: {datetime.now().strftime('%H:%M:%S')}"
 
-# Запуск парсера как демонического потока [cite: 2]
 bg_thread = Thread(target=parser_loop, daemon=True)
 bg_thread.start()
 
