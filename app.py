@@ -7,7 +7,7 @@ from threading import Thread
 
 # --- НАСТРОЙКИ ---
 # ВАЖНО: Вставь сюда свой актуальный URL из Google Apps Script (Web App)
-GAS_URL = "https://script.google.com/macros/s/ТВОЙ_КОД/exec" 
+GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
