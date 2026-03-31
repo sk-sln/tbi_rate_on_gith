@@ -14,82 +14,85 @@ HEADERS = {
 }
 
 def get_now_ms():
+    """Возвращает Unix Timestamp в миллисекундах (Strict Int)"""
     return int(time.time() * 1000)
 
 def clean_val(val):
-    """Очистка строк и замена пустых значений на N/A"""
-    if not val or str(val).strip() == "": return "N/A"
+    """Очистка строк и приведение к формату String согласно паспорту"""
+    if val is None or str(val).strip() == "": return "N/A"
     return str(val).strip().replace(',', '.')
 
 def get_error_placeholder(bank_name, is_online=False):
-    """Создает запись-заглушку, чтобы банк не пропадал из логов ГАС"""
+    """Создает запись-заглушку строго по схеме данных из Паспорта"""
     return {
-        "bank": bank_name,
-        "is_online": is_online,
+        "bank": str(bank_name),
+        "is_online": bool(is_online),
         "usd_buy": "N/A", "usd_sell": "N/A",
         "eur_buy": "N/A", "eur_sell": "N/A",
-        "updated_at_ms": 0 # Сигнал для ГАС, что данные не обновлены
+        "updated_at_ms": 0 # 0 означает, что данные устарели (Flutter покажет красным)
     }
 
 # --- ПАРСЕРЫ ---
 
 def get_tbc():
     session = requests.Session()
-    # Имитируем реальные заголовки браузера
     browser_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,/ ;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://www.google.com/', # Типа пришли из поиска
+        'Referer': 'https://www.google.com/', 
         'Connection': 'keep-alive',
     }
     
     try:
-        # ШАГ 1: Заходим на главную, чтобы получить куки безопасности
         session.get("https://www.tbcbank.ge/web/en", headers=browser_headers, timeout=20)
-        time.sleep(random.uniform(2, 4)) # Случайная пауза, как у человека
+        time.sleep(random.uniform(2, 4)) 
         
-        # ШАГ 2: Идем за курсами
         r = session.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=browser_headers, timeout=25)
         
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, 'html.parser')
-            # Твой текущий код поиска значений в soup...
-            # (Оставь логику извлечения данных, которую мы писали ранее)
-            return data
+            now = get_now_ms()
+            branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
+            online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
+            
+            # ТУТ ВАША ЛОГИКА ПОИСКА В SOUP ДЛЯ TBC
+            # Пример того, как нужно сохранять (строго usd_buy, eur_sell и т.д.):
+            # branch.update({"usd_buy": "2.65", "usd_sell": "2.70", "eur_buy": "2.80", "eur_sell": "2.90"})
+            # online.update({"usd_buy": "2.66", "usd_sell": "2.69", "eur_buy": "2.81", "eur_sell": "2.89"})
+            
+            # Если данные реально спарсились, возвращаем их. Иначе проваливаемся в except.
+            # return [branch, online] 
+            
+            return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
         else:
-            print(f"[-] TBC вернул статус {r.status_code}")
-            return None
+            return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
     except Exception as e:
         print(f"[-] Ошибка TBC: {e}")
-        return None
+        return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
 
 def get_bog():
-    """Парсер Bank of Georgia согласно разделу 4 Паспорта"""
+    """Bank of Georgia: Парсинг через внутренний API"""
     try:
         h = HEADERS.copy()
         h.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
-        # API из паспорта
         r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
         items = r.json()
-        now = get_now_ms() # Int (Unix ms) по разделу 2
+        now = get_now_ms()
         
-        # Разделяем на филиал и приложение по полю is_online (Bool)
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
         online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
         
         for i in items:
             c = i.get('code')
             if c == 'USD':
-                # Строго usd_buy / usd_sell (String)
                 branch.update({"usd_buy": clean_val(i.get('buy')), "usd_sell": clean_val(i.get('sell'))})
                 online.update({"usd_buy": clean_val(i.get('buyApp')), "usd_sell": clean_val(i.get('sellApp'))})
             elif c == 'EUR':
                 branch.update({"eur_buy": clean_val(i.get('buy')), "eur_sell": clean_val(i.get('sell'))})
                 online.update({"eur_buy": clean_val(i.get('buyApp')), "eur_sell": clean_val(i.get('sellApp'))})
-        
         return [branch, online]
-    except Exception as e:
+    except Exception as e: 
         print(f"[-] Ошибка BoG: {e}")
         return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
@@ -101,30 +104,33 @@ def get_credo():
     }
     
     try:
-        # Сначала "прогреваем" сессию на главной
         session.get("https://credobank.ge/en/", headers=browser_headers, timeout=20)
         time.sleep(random.uniform(3, 5))
-        
-        # Запрашиваем страницу с курсами
         r = session.get("https://credobank.ge/en/exchange-rates/", headers=browser_headers, timeout=25)
         
         if r.status_code == 200:
-            # Твоя логика поиска в soup...
-            return data
-        return None
+            soup = BeautifulSoup(r.text, 'html.parser')
+            now = get_now_ms()
+            branch = {"bank": "Credo Bank", "is_online": False, "updated_at_ms": now}
+            
+            # ТУТ ВАША ЛОГИКА ПОИСКА В SOUP ДЛЯ CREDO
+            # branch.update({"usd_buy": "...", "usd_sell": "...", "eur_buy": "...", "eur_sell": "..."})
+            # return [branch]
+            
+            return [get_error_placeholder("Credo Bank", False)]
+        return [get_error_placeholder("Credo Bank", False)]
     except Exception as e:
         print(f"[-] Ошибка Credo: {e}")
-        return None
+        return [get_error_placeholder("Credo Bank", False)]
 
 def get_liberty():
-    """Парсер Liberty Bank согласно разделу 4 Паспорта"""
+    """Liberty Bank: Парсинг HTML контейнеров currency-item"""
     try:
         r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
         now = get_now_ms()
         res = {"bank": "Liberty Bank", "is_online": False, "updated_at_ms": now}
         
-        # По паспорту: поиск по контейнерам currency-item
         items = soup.find_all('div', class_='currency-item')
         for item in items:
             code_div = item.find('div', class_='currency-code')
@@ -137,20 +143,18 @@ def get_liberty():
                     res.update({"usd_buy": clean_val(vals[0].text), "usd_sell": clean_val(vals[1].text)})
                 elif 'EUR' in code:
                     res.update({"eur_buy": clean_val(vals[0].text), "eur_sell": clean_val(vals[1].text)})
-        
         return [res]
     except Exception as e:
         print(f"[-] Ошибка Liberty: {e}")
         return [get_error_placeholder("Liberty Bank", False)]
 
 def get_rico():
-    """Парсер Rico Credit на основе предоставленного HTML-кода"""
+    """Rico Credit: Парсинг HTML таблицы"""
     try:
         r = requests.get("https://www.rico.ge/en", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
         res = {"bank": "Rico Credit", "is_online": False, "updated_at_ms": get_now_ms()}
         
-        # Ищем таблицу по классу из твоего HTML
         table = soup.find('table', class_='first-three-currencies')
         if table:
             body = table.find('tbody', class_='first-table-body')
@@ -158,20 +162,23 @@ def get_rico():
                 txt = tr.text.upper()
                 vals = tr.find_all('td', class_='currency-value')
                 if len(vals) >= 2:
-                    if 'USD' in txt and 'EUR' not in txt: # Исключаем USD-EUR кросс-курс
-                        res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
+                    if 'USD' in txt and 'EUR' not in txt: 
+                        res.update({"usd_buy": clean_val(vals[0].text), "usd_sell": clean_val(vals[1].text)})
                     elif 'EUR' in txt:
-                        res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
+                        res.update({"eur_buy": clean_val(vals[0].text), "eur_sell": clean_val(vals[1].text)})
         
         return [res] if "usd_buy" in res else [get_error_placeholder("Rico Credit", False)]
-    except:
+    except Exception as e:
         return [get_error_placeholder("Rico Credit", False)]
 
 # --- ЦИКЛ ПАРСИНГА ---
 def parser_loop():
     time.sleep(90) # Защита от нестабильности сети Koyeb при старте
+    
+    # ПРАВИЛО "NO DATA LOSS": Кэш создается ОДИН РАЗ до начала цикла
+    master_cache = {} 
+    
     while True:
-        master_cache = {}
         print(f"--- ЦИКЛ ПАРСИНГА СТАРТ: {datetime.now().strftime('%H:%M:%S')} ---")
         
         parsers = [get_tbc, get_bog, get_credo, get_liberty, get_rico]
@@ -179,23 +186,31 @@ def parser_loop():
         for f in parsers:
             try:
                 res_list = f()
-                for entry in res_list:
-                    # Приводим все значения к единому формату
-                    for k in ["usd_buy", "usd_sell", "eur_buy", "eur_sell"]:
-                        if k in entry: entry[k] = clean_val(entry[k])
+                
+                # Защита: если функция почему-то вернула None
+                if not res_list:
+                    continue
                     
+                for entry in res_list:
+                    # Приводим все значения курсов к формату
+                    for k in ["usd_buy", "usd_sell", "eur_buy", "eur_sell"]:
+                        if k in entry: 
+                            entry[k] = clean_val(entry[k])
+                    
+                    # Обновляем кэш. Старые данные остаются, новые перезаписываются!
                     key = f"{entry['bank']}_{entry['is_online']}"
                     master_cache[key] = entry
                 
-                # Логируем первую запись для визуального контроля
-                status = "OK" if res_list[0]['updated_at_ms'] > 0 else "EMPTY/ERROR"
+                status = "OK" if res_list[0].get('updated_at_ms', 0) > 0 else "EMPTY/ERROR"
                 print(f"  [.] {f.__name__}: {status}")
             except Exception as e:
                 print(f"  [!] ОШИБКА {f.__name__}: {e}")
-            time.sleep(5)
+            
+            time.sleep(5) # Пауза между банками
 
         if master_cache:
             try:
+                # Отправляем только список значений
                 payload = list(master_cache.values())
                 requests.post(GAS_URL, json=payload, timeout=30)
                 print(f"--- ПАКЕТ ОТПРАВЛЕН В ГАС ({len(payload)} зап.) ---")
@@ -203,14 +218,16 @@ def parser_loop():
                 print(f"--- ОШИБКА ОТПРАВКИ: {e} ---")
 
         print("Сплю 14 минут...")
-        time.sleep(840)
+        time.sleep(840) # 14 минут по Паспорту
 
 # --- FLASK (ДЛЯ KOYEB) ---
-app = Flask('')
-@app.route('/')
-def home(): return "OK"
+app = Flask(__name__)
 
-# Запуск в фоновом потоке [cite: 2]
+@app.route('/')
+def home(): 
+    return "OK - GeoCurrency Tracker is running!"
+
+# Запуск в фоновом потоке
 Thread(target=parser_loop, daemon=True).start()
 
 if __name__ == "__main__":
