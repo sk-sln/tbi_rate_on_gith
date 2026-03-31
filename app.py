@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask
 from threading import Thread
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (ИЗ ПАСПОРТА) ---
 GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
 
 HEADERS = {
@@ -16,18 +16,18 @@ def get_now_ms():
     return int(time.time() * 1000)
 
 def clean_val(val):
+    """Очистка строк и замена пустых значений на N/A"""
     if not val or str(val).strip() == "": return "N/A"
     return str(val).strip().replace(',', '.')
 
-# --- ФУНКЦИЯ-ЗАГЛУШКА (Placeholder) ---
 def get_error_placeholder(bank_name, is_online=False):
-    """Создает пустую запись, если банк не ответил, чтобы не терять его в логах ГАС"""
+    """Создает запись-заглушку, чтобы банк не пропадал из логов ГАС"""
     return {
         "bank": bank_name,
         "is_online": is_online,
         "usd_buy": "N/A", "usd_sell": "N/A",
         "eur_buy": "N/A", "eur_sell": "N/A",
-        "updated_at_ms": 0 # ГАС увидит 0 и поймет, что это ошибка/старые данные
+        "updated_at_ms": 0 # Сигнал для ГАС, что данные не обновлены
     }
 
 # --- ПАРСЕРЫ ---
@@ -95,44 +95,54 @@ def get_liberty():
     except: return [get_error_placeholder("Liberty Bank", False)]
 
 def get_rico():
+    """Парсер Rico Credit на основе предоставленного HTML-кода"""
     try:
         r = requests.get("https://www.rico.ge/en", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
         res = {"bank": "Rico Credit", "is_online": False, "updated_at_ms": get_now_ms()}
-        table = soup.find('table', class_='currency-table')
+        
+        # Ищем таблицу по классу из твоего HTML
+        table = soup.find('table', class_='first-three-currencies')
         if table:
-            for tr in table.find_all('tr'):
-                cols = tr.find_all('td')
-                if not cols: continue
+            body = table.find('tbody', class_='first-table-body')
+            for tr in body.find_all('tr'):
                 txt = tr.text.upper()
-                if 'USD' in txt: res.update({"usd_buy": cols[1].text, "usd_sell": cols[2].text})
-                if 'EUR' in txt: res.update({"eur_buy": cols[1].text, "eur_sell": cols[2].text})
+                vals = tr.find_all('td', class_='currency-value')
+                if len(vals) >= 2:
+                    if 'USD' in txt and 'EUR' not in txt: # Исключаем USD-EUR кросс-курс
+                        res.update({"usd_buy": vals[0].text, "usd_sell": vals[1].text})
+                    elif 'EUR' in txt:
+                        res.update({"eur_buy": vals[0].text, "eur_sell": vals[1].text})
+        
         return [res] if "usd_buy" in res else [get_error_placeholder("Rico Credit", False)]
-    except: return [get_error_placeholder("Rico Credit", False)]
+    except:
+        return [get_error_placeholder("Rico Credit", False)]
 
 # --- ЦИКЛ ПАРСИНГА ---
 def parser_loop():
-    time.sleep(45) 
+    time.sleep(45) # Защита от нестабильности сети Koyeb при старте
     while True:
         master_cache = {}
         print(f"--- ЦИКЛ ПАРСИНГА СТАРТ: {datetime.now().strftime('%H:%M:%S')} ---")
         
-        # Список банков (теперь 5 штук)
         parsers = [get_tbc, get_bog, get_credo, get_liberty, get_rico]
         
         for f in parsers:
             try:
                 res_list = f()
                 for entry in res_list:
-                    # Чистим значения (если N/A - останется N/A)
+                    # Приводим все значения к единому формату
                     for k in ["usd_buy", "usd_sell", "eur_buy", "eur_sell"]:
                         if k in entry: entry[k] = clean_val(entry[k])
                     
                     key = f"{entry['bank']}_{entry['is_online']}"
                     master_cache[key] = entry
-                print(f"  [.] {f.__name__} обработан (Данные: {res_list[0]['usd_buy']})")
+                
+                # Логируем первую запись для визуального контроля
+                status = "OK" if res_list[0]['updated_at_ms'] > 0 else "EMPTY/ERROR"
+                print(f"  [.] {f.__name__}: {status}")
             except Exception as e:
-                print(f"  [!] Критическая ошибка в {f.__name__}: {e}")
+                print(f"  [!] ОШИБКА {f.__name__}: {e}")
             time.sleep(5)
 
         if master_cache:
@@ -146,11 +156,12 @@ def parser_loop():
         print("Сплю 14 минут...")
         time.sleep(840)
 
-# --- FLASK ---
+# --- FLASK (ДЛЯ KOYEB) ---
 app = Flask('')
 @app.route('/')
 def home(): return "OK"
 
+# Запуск в фоновом потоке [cite: 2]
 Thread(target=parser_loop, daemon=True).start()
 
 if __name__ == "__main__":
