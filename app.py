@@ -10,7 +10,8 @@ from threading import Thread
 GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9"
 }
 
 def get_now_ms():
@@ -102,71 +103,78 @@ def get_tbc():
     except Exception as e:
         print(f"[-] Ошибка TBC: {e}")
         return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
+        
 def get_bog():
-    """Парсер Bank of Georgia: API /currencies/commercial"""
+    """Парсер Bank of Georgia: API /currencies/commercial (v2.0)"""
     try:
+        # Копируем базовые заголовки и добавляем специфичные для BoG
         h = HEADERS.copy()
         h.update({
             "Referer": "https://bankofgeorgia.ge/en/main/currencies",
-            "Accept": "application/json, text/plain, */*"
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest"
         })
         
-        # Делаем запрос к API
+        # Запрос к официальному коммерческому API
         r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
         
         if r.status_code != 200:
-            print(f"[-] BoG API вернул статус {r.status_code}")
+            print(f"[-] BoG API error: {r.status_code}")
             return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
         
         data = r.json()
         
-        # ГИБКАЯ ПРОВЕРКА СТРУКТУРЫ (защита от slice error)
-        # Если пришел список — берем его, если словарь с ключом — берем из ключа
+        # Определяем, где лежат данные (список может быть обернут в объект)
         items = data if isinstance(data, list) else data.get('currencies', [])
         
-        now = get_now_ms() # Unix Timestamp (Int) по Паспорту
+        now = get_now_ms()
         
-        # Создаем скелеты объектов по Паспорту
-        branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
-        online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
+        # Создаем объекты согласно Паспорту проекта
+        branch = {
+            "bank": "Bank of Georgia", 
+            "is_online": False, 
+            "updated_at_ms": now,
+            "usd_buy": "N/A", "usd_sell": "N/A", "eur_buy": "N/A", "eur_sell": "N/A"
+        }
+        online = {
+            "bank": "Bank of Georgia", 
+            "is_online": True, 
+            "updated_at_ms": now,
+            "usd_buy": "N/A", "usd_sell": "N/A", "eur_buy": "N/A", "eur_sell": "N/A"
+        }
         
-        found_usd = False
-        found_eur = False
-
+        found = False
         for i in items:
-            code = i.get('code')
+            code = str(i.get('code', '')).upper()
+            
+            # Маппинг ключей: buy/sell - отделение, buyApp/sellApp - мобильное приложение
             if code == 'USD':
-                # Ключи из консоли разработчика BoG: buy, sell, buyApp, sellApp
                 branch.update({
-                    "usd_buy": clean_val(i.get('buy')), 
-                    "usd_sell": clean_val(i.get('sell'))
+                    "usd_buy": clean_val(str(i.get('buy', 'N/A'))), 
+                    "usd_sell": clean_val(str(i.get('sell', 'N/A')))
                 })
                 online.update({
-                    "usd_buy": clean_val(i.get('buyApp')), 
-                    "usd_sell": clean_val(i.get('sellApp'))
+                    "usd_buy": clean_val(str(i.get('buyApp', 'N/A'))), 
+                    "usd_sell": clean_val(str(i.get('sellApp', 'N/A')))
                 })
-                found_usd = True
+                found = True
             elif code == 'EUR':
                 branch.update({
-                    "eur_buy": clean_val(i.get('buy')), 
-                    "eur_sell": clean_val(i.get('sell'))
+                    "eur_buy": clean_val(str(i.get('buy', 'N/A'))), 
+                    "eur_sell": clean_val(str(i.get('sell', 'N/A')))
                 })
                 online.update({
-                    "eur_buy": clean_val(i.get('buyApp')), 
-                    "eur_sell": clean_val(i.get('sellApp'))
+                    "eur_buy": clean_val(str(i.get('buyApp', 'N/A'))), 
+                    "eur_sell": clean_val(str(i.get('sellApp', 'N/A')))
                 })
-                found_eur = True
+                found = True
 
-        # Если API ответило, но валют внутри нет (бывает при тех. работах)
-        if not found_usd and not found_eur:
-             return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
-
-        return [branch, online]
+        return [branch, online] if found else [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
     except Exception as e:
         print(f"[-] Ошибка BoG: {e}")
         return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
-
+        
 def get_credo():
     """Парсер Credo Bank согласно разделу 4 Паспорта (HTML атрибуты)"""
     session = requests.Session()
