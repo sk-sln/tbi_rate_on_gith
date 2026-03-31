@@ -45,38 +45,45 @@ def get_error_placeholder(bank_name, is_online=False):
 
 def get_tbc():
     try:
-        # Используем найденный тобой URL API
+        # 1. Специфические заголовки именно для API ТБС
+        api_headers = HEADERS.copy()
+        api_headers.update({
+            "Referer": "https://www.tbcbank.ge/",
+            "Origin": "https://www.tbcbank.ge",
+            "Accept": "application/json, text/plain, */*",
+        })
+        
+        # 2. Тот самый URL, который ты нашел
         api_url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
         
-        r = requests.get(api_url, headers=HEADERS, timeout=20)
+        # 3. Делаем запрос с сессией для лучшей маскировки
+        session = requests.Session()
+        r = session.get(api_url, headers=api_headers, timeout=20)
         
         if r.status_code != 200:
-            print(f"[-] TBC API error: {r.status_code}")
+            print(f"[-] TBC API error: {r.status_code}. Тело ответа: {r.text[:100]}")
             return [get_error_placeholder("TBC Bank", False)]
         
         data = r.json()
         now = get_now_ms()
-        
-        # Создаем только ОДНУ запись для физических отделений (Branch)
         branch = create_record("TBC Bank", False, now)
 
         for item in data:
             curr = item.get('currency')
             if curr == 'USD':
-                # Используем только коммерческий курс, так как Digital здесь нет
                 branch["usd_buy"] = clean_val(item.get('buyCommercial'))
                 branch["usd_sell"] = clean_val(item.get('sellCommercial'))
-                
             elif curr == 'EUR':
                 branch["eur_buy"] = clean_val(item.get('buyCommercial'))
                 branch["eur_sell"] = clean_val(item.get('sellCommercial'))
 
-        # Возвращаем список из одной записи
         return [branch]
         
     except Exception as e:
         print(f"[-] Ошибка TBC API: {e}")
         return [get_error_placeholder("TBC Bank", False)]
+
+
 def get_bog():
     try:
         h = HEADERS.copy()
