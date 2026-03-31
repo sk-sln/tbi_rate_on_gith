@@ -44,48 +44,39 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_tbc():
-    session = requests.Session()
     try:
-        session.get("https://www.tbcbank.ge/web/en", headers=HEADERS, timeout=20)
-        time.sleep(random.uniform(1, 2))
-        r = session.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=HEADERS, timeout=25)
-        if r.status_code != 200: return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
+        # Используем найденный тобой URL API
+        api_url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
         
-        soup = BeautifulSoup(r.text, 'html.parser')
+        r = requests.get(api_url, headers=HEADERS, timeout=20)
+        
+        if r.status_code != 200:
+            print(f"[-] TBC API error: {r.status_code}")
+            return [get_error_placeholder("TBC Bank", False)]
+        
+        data = r.json()
         now = get_now_ms()
-        # Инициализируем объекты с готовыми ключами "N/A"
-        branch = create_record("TBC Bank", False, now)
-        online = create_record("TBC Bank", True, now)
-
-        table = None
-        for t in soup.find_all('table'):
-            if 'USD' in t.text or 'usd' in t.text.lower():
-                table = t
-                break
         
-        if table:
-            for row in table.find_all('tr'):
-                cols = row.find_all('td')
-                if len(cols) < 3: continue
-                txt = cols[0].text.strip().upper()
-                if 'USD' in txt:
-                    branch["usd_buy"] = clean_val(cols[1].text)
-                    branch["usd_sell"] = clean_val(cols[2].text)
-                    if len(cols) >= 5: 
-                        online["usd_buy"] = clean_val(cols[3].text)
-                        online["usd_sell"] = clean_val(cols[4].text)
-                elif 'EUR' in txt:
-                    branch["eur_buy"] = clean_val(cols[1].text)
-                    branch["eur_sell"] = clean_val(cols[2].text)
-                    if len(cols) >= 5: 
-                        online["eur_buy"] = clean_val(cols[3].text)
-                        online["eur_sell"] = clean_val(cols[4].text)
+        # Создаем только ОДНУ запись для физических отделений (Branch)
+        branch = create_record("TBC Bank", False, now)
 
-        return [branch, online]
+        for item in data:
+            curr = item.get('currency')
+            if curr == 'USD':
+                # Используем только коммерческий курс, так как Digital здесь нет
+                branch["usd_buy"] = clean_val(item.get('buyCommercial'))
+                branch["usd_sell"] = clean_val(item.get('sellCommercial'))
+                
+            elif curr == 'EUR':
+                branch["eur_buy"] = clean_val(item.get('buyCommercial'))
+                branch["eur_sell"] = clean_val(item.get('sellCommercial'))
+
+        # Возвращаем список из одной записи
+        return [branch]
+        
     except Exception as e:
-        print(f"[-] Ошибка TBC: {e}")
-        return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
-
+        print(f"[-] Ошибка TBC API: {e}")
+        return [get_error_placeholder("TBC Bank", False)]
 def get_bog():
     try:
         h = HEADERS.copy()
