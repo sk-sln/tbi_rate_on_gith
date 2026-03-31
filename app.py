@@ -35,91 +35,201 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_tbc():
+    """Парсер TBC Bank согласно разделу 4 Паспорта (HTML Scraping)"""
     session = requests.Session()
+    # Эмулируем реальный браузер, чтобы избежать EMPTY/ERROR
     browser_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://www.google.com/', 
+        'Referer': 'https://www.tbcbank.ge/web/en',
         'Connection': 'keep-alive',
     }
     
     try:
+        # 1. Заходим на главную для получения куки
         session.get("https://www.tbcbank.ge/web/en", headers=browser_headers, timeout=20)
-        time.sleep(random.uniform(2, 4)) 
+        time.sleep(random.uniform(1, 3))
         
+        # 2. Переходим на страницу курсов
         r = session.get("https://www.tbcbank.ge/web/en/exchange-rates", headers=browser_headers, timeout=25)
         
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            now = get_now_ms()
-            branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
-            online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
-            
-            # ТУТ ВАША ЛОГИКА ПОИСКА В SOUP ДЛЯ TBC
-            # Пример того, как нужно сохранять (строго usd_buy, eur_sell и т.д.):
-            # branch.update({"usd_buy": "2.65", "usd_sell": "2.70", "eur_buy": "2.80", "eur_sell": "2.90"})
-            # online.update({"usd_buy": "2.66", "usd_sell": "2.69", "eur_buy": "2.81", "eur_sell": "2.89"})
-            
-            # Если данные реально спарсились, возвращаем их. Иначе проваливаемся в except.
-            # return [branch, online] 
-            
+        if r.status_code != 200:
             return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
-        else:
+
+        soup = BeautifulSoup(r.text, 'html.parser')
+        now = get_now_ms()
+        
+        # Инициализируем объекты строго по Паспорту
+        branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
+        online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
+
+        # Поиск таблицы курсов. В TBC это обычно div с классом exchange-table или сама table
+        table = soup.find('table') # Берем первую таблицу с курсами
+        if not table:
             return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
+
+        rows = table.find_all('tr')
+        
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) < 3: continue
+            
+            # Текст в первой колонке (обычно там флаг + код валюты)
+            currency_text = cols[0].text.strip().upper()
+            
+            # Логика извлечения (в TBC часто 2 колонки покупки и 2 продажи: Branch vs Online)
+            if 'USD' in currency_text:
+                # Порядок в TBC: [0]Валюта, [1]Branch Buy, [2]Branch Sell, [3]Online Buy, [4]Online Sell
+                # В зависимости от верстки сайта индексы могут быть 1,2 и 5,6.
+                # Используем твой код из панели:
+                branch.update({"usd_buy": clean_val(cols[1].text), "usd_sell": clean_val(cols[2].text)})
+                if len(cols) >= 5:
+                    online.update({"usd_buy": clean_val(cols[3].text), "usd_sell": clean_val(cols[4].text)})
+            
+            elif 'EUR' in currency_text:
+                branch.update({"eur_buy": clean_val(cols[1].text), "eur_sell": clean_val(cols[2].text)})
+                if len(cols) >= 5:
+                    online.update({"eur_buy": clean_val(cols[3].text), "eur_sell": clean_val(cols[4].text)})
+
+        # Если данные в Online не нашлись в основной таблице, TBC часто дублирует Branch
+        if "usd_buy" not in online:
+            online.update({"usd_buy": branch.get("usd_buy"), "usd_sell": branch.get("usd_sell")})
+            online.update({"eur_buy": branch.get("eur_buy"), "eur_sell": branch.get("eur_sell")})
+
+        return [branch, online]
+
     except Exception as e:
         print(f"[-] Ошибка TBC: {e}")
         return [get_error_placeholder("TBC Bank", False), get_error_placeholder("TBC Bank", True)]
-
 def get_bog():
-    """Bank of Georgia: Парсинг через внутренний API"""
+    """Парсер Bank of Georgia: API /currencies/commercial"""
     try:
         h = HEADERS.copy()
-        h.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
-        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
-        print(f"DEBUG BOG: {r.json()[:1]}") # Печатаем первый элемент ответа
-        items = r.json()
-        now = get_now_ms()
+        h.update({
+            "Referer": "https://bankofgeorgia.ge/en/main/currencies",
+            "Accept": "application/json, text/plain, */*"
+        })
         
+        # Делаем запрос к API
+        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
+        
+        if r.status_code != 200:
+            print(f"[-] BoG API вернул статус {r.status_code}")
+            return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
+        
+        data = r.json()
+        
+        # ГИБКАЯ ПРОВЕРКА СТРУКТУРЫ (защита от slice error)
+        # Если пришел список — берем его, если словарь с ключом — берем из ключа
+        items = data if isinstance(data, list) else data.get('currencies', [])
+        
+        now = get_now_ms() # Unix Timestamp (Int) по Паспорту
+        
+        # Создаем скелеты объектов по Паспорту
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
         online = {"bank": "Bank of Georgia", "is_online": True, "updated_at_ms": now}
         
+        found_usd = False
+        found_eur = False
+
         for i in items:
-            c = i.get('code')
-            if c == 'USD':
-                branch.update({"usd_buy": clean_val(i.get('buy')), "usd_sell": clean_val(i.get('sell'))})
-                online.update({"usd_buy": clean_val(i.get('buyApp')), "usd_sell": clean_val(i.get('sellApp'))})
-            elif c == 'EUR':
-                branch.update({"eur_buy": clean_val(i.get('buy')), "eur_sell": clean_val(i.get('sell'))})
-                online.update({"eur_buy": clean_val(i.get('buyApp')), "eur_sell": clean_val(i.get('sellApp'))})
+            code = i.get('code')
+            if code == 'USD':
+                # Ключи из консоли разработчика BoG: buy, sell, buyApp, sellApp
+                branch.update({
+                    "usd_buy": clean_val(i.get('buy')), 
+                    "usd_sell": clean_val(i.get('sell'))
+                })
+                online.update({
+                    "usd_buy": clean_val(i.get('buyApp')), 
+                    "usd_sell": clean_val(i.get('sellApp'))
+                })
+                found_usd = True
+            elif code == 'EUR':
+                branch.update({
+                    "eur_buy": clean_val(i.get('buy')), 
+                    "eur_sell": clean_val(i.get('sell'))
+                })
+                online.update({
+                    "eur_buy": clean_val(i.get('buyApp')), 
+                    "eur_sell": clean_val(i.get('sellApp'))
+                })
+                found_eur = True
+
+        # Если API ответило, но валют внутри нет (бывает при тех. работах)
+        if not found_usd and not found_eur:
+             return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
+
         return [branch, online]
-    except Exception as e: 
+
+    except Exception as e:
         print(f"[-] Ошибка BoG: {e}")
         return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
 def get_credo():
+    """Парсер Credo Bank согласно разделу 4 Паспорта (HTML атрибуты)"""
     session = requests.Session()
+    # Усиленные заголовки для обхода блокировок
     browser_headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'ka,en-US;q=0.7,en;q=0.3',
+        'Referer': 'https://credobank.ge/en/',
+        'Connection': 'keep-alive',
     }
     
     try:
+        # 1. Заход на главную (иногда требуется для сессии)
         session.get("https://credobank.ge/en/", headers=browser_headers, timeout=20)
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(2, 4))
+        
+        # 2. Запрос страницы курсов
         r = session.get("https://credobank.ge/en/exchange-rates/", headers=browser_headers, timeout=25)
         
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, 'html.parser')
-            now = get_now_ms()
-            branch = {"bank": "Credo Bank", "is_online": False, "updated_at_ms": now}
-            
-            # ТУТ ВАША ЛОГИКА ПОИСКА В SOUP ДЛЯ CREDO
-            # branch.update({"usd_buy": "...", "usd_sell": "...", "eur_buy": "...", "eur_sell": "..."})
-            # return [branch]
-            
+        if r.status_code != 200:
+            print(f"[-] Credo вернул статус {r.status_code}")
             return [get_error_placeholder("Credo Bank", False)]
-        return [get_error_placeholder("Credo Bank", False)]
+
+        soup = BeautifulSoup(r.text, 'html.parser')
+        now = get_now_ms()
+        
+        # Согласно паспорту: Credo имеет только филиальный курс (is_online: False)
+        res = {"bank": "Credo Bank", "is_online": False, "updated_at_ms": now}
+
+        # Ищем ячейки таблицы по атрибутам, которые мы видели в коде страницы
+        # Обычно это структура <td data-currency="USD" data-course="buy">
+        currencies = ['USD', 'EUR']
+        found_data = False
+
+        for curr in currencies:
+            buy_td = soup.find('td', attrs={"data-currency": curr, "data-course": "buy"})
+            sell_td = soup.find('td', attrs={"data-currency": curr, "data-course": "sell"})
+            
+            if buy_td and sell_td:
+                prefix = curr.lower() # 'usd' или 'eur'
+                res.update({
+                    f"{prefix}_buy": clean_val(buy_td.text),
+                    f"{prefix}_sell": clean_val(sell_td.text)
+                })
+                found_data = True
+
+        if not found_data:
+            # Если атрибуты не нашлись, пробуем найти через поиск по тексту в таблице
+            rows = soup.find_all('tr')
+            for row in rows:
+                txt = row.text.upper()
+                cols = row.find_all('td')
+                if len(cols) >= 3:
+                    if 'USD' in txt:
+                        res.update({"usd_buy": clean_val(cols[1].text), "usd_sell": clean_val(cols[2].text)})
+                        found_data = True
+                    elif 'EUR' in txt:
+                        res.update({"eur_buy": clean_val(cols[1].text), "eur_sell": clean_val(cols[2].text)})
+                        found_data = True
+
+        return [res] if found_data else [get_error_placeholder("Credo Bank", False)]
+
     except Exception as e:
         print(f"[-] Ошибка Credo: {e}")
         return [get_error_placeholder("Credo Bank", False)]
