@@ -45,7 +45,6 @@ def get_error_placeholder(bank_name, is_online=False):
 
 def get_tbc():
     try:
-        # 1. Специфические заголовки именно для API ТБС
         api_headers = HEADERS.copy()
         api_headers.update({
             "Referer": "https://www.tbcbank.ge/",
@@ -53,29 +52,36 @@ def get_tbc():
             "Accept": "application/json, text/plain, */*",
         })
         
-        # 2. Тот самый URL, который ты нашел
         api_url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
         
-        # 3. Делаем запрос с сессией для лучшей маскировки
         session = requests.Session()
         r = session.get(api_url, headers=api_headers, timeout=20)
         
         if r.status_code != 200:
-            print(f"[-] TBC API error: {r.status_code}. Тело ответа: {r.text[:100]}")
+            print(f"[-] TBC API error: {r.status_code}")
             return [get_error_placeholder("TBC Bank", False)]
         
         data = r.json()
+        
+        # --- ПРОВЕРКА НА ТИП ДАННЫХ (Защита от 'str' object error) ---
+        if not isinstance(data, list):
+            print(f"[-] TBC API вернул не список, а: {type(data)}")
+            return [get_error_placeholder("TBC Bank", False)]
+        # -------------------------------------------------------------
+
         now = get_now_ms()
         branch = create_record("TBC Bank", False, now)
 
         for item in data:
-            curr = item.get('currency')
-            if curr == 'USD':
-                branch["usd_buy"] = clean_val(item.get('buyCommercial'))
-                branch["usd_sell"] = clean_val(item.get('sellCommercial'))
-            elif curr == 'EUR':
-                branch["eur_buy"] = clean_val(item.get('buyCommercial'))
-                branch["eur_sell"] = clean_val(item.get('sellCommercial'))
+            # Теперь мы уверены, что item — это словарь
+            if isinstance(item, dict):
+                curr = item.get('currency')
+                if curr == 'USD':
+                    branch["usd_buy"] = clean_val(item.get('buyCommercial'))
+                    branch["usd_sell"] = clean_val(item.get('sellCommercial'))
+                elif curr == 'EUR':
+                    branch["eur_buy"] = clean_val(item.get('buyCommercial'))
+                    branch["eur_sell"] = clean_val(item.get('sellCommercial'))
 
         return [branch]
         
