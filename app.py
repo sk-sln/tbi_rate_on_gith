@@ -1,26 +1,13 @@
 import requests
 from bs4 import BeautifulSoup
 import time
-import json
 from datetime import datetime
 from flask import Flask
 from threading import Thread
 
-# --- ИНИЦИАЛИЗАЦИЯ ВЕБ-СЕРВЕРА ДЛЯ KOYEB ---
-app = Flask('')
-
-@app.route('/')
-def home():
-    # Эта страница будет открываться, когда ГАС или ты сам заходите по ссылке
-    return f"Parser is active. Last internal check: {datetime.now().strftime('%H:%M:%S')}"
-
-def run_web():
-    # Порт 8080 обязателен для Koyeb Health Check
-    app.run(host='0.0.0.0', port=8080)
-
 # --- НАСТРОЙКИ ---
-# ВАЖНО: Проверь, что это последняя ссылка из Deploy в GAS
-GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
+# ВАЖНО: Вставь сюда свой актуальный URL из Google Apps Script (Web App)
+GAS_URL = "https://script.google.com/macros/s/ТВОЙ_КОД/exec" 
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -33,7 +20,7 @@ def clean_val(val):
     if not val: return "0.00"
     return str(val).strip().replace(',', '.')
 
-# --- ПАРСЕРЫ (TBC, BOG, Credo, Liberty) ---
+# --- ПАРСЕРЫ ---
 
 def get_tbc():
     try:
@@ -41,7 +28,6 @@ def get_tbc():
         soup = BeautifulSoup(r.text, 'html.parser')
         rows = soup.find_all('div', class_='exchange-table__row')
         now = get_now_ms()
-        res = []
         branch = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
         online = {"bank": "TBC Bank", "is_online": True, "updated_at_ms": now}
         for row in rows:
@@ -100,10 +86,12 @@ def get_liberty():
         return [res]
     except: return []
 
-# --- ОСНОВНОЙ ЦИКЛ ---
-
+# --- ОСНОВНОЙ ЦИКЛ ПАРСИНГА ---
 def parser_loop():
     master_cache = {} 
+    # Ждем 5 секунд перед первым запуском, чтобы Gunicorn успел полностью загрузиться
+    time.sleep(5)
+    
     while True:
         print(f"--- НАЧАЛО КРУГА ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
@@ -113,20 +101,16 @@ def parser_loop():
                 data_list = parse_func()
                 if data_list:
                     for entry in data_list:
-                        # Чистка данных
                         for k in ["usd_buy", "usd_sell", "eur_buy", "eur_sell"]:
                             if k in entry: entry[k] = clean_val(entry[k])
-                        
-                        # Ключ для master_cache (индивидуальное обновление)
                         key = f"{entry['bank']}_{entry['is_online']}"
                         master_cache[key] = entry
                     print(f"  [+] {data_list[0]['bank']} успешно обработан.")
             except Exception as e:
                 print(f"  [!] Ошибка в {parse_func.__name__}: {e}")
             
-            time.sleep(10) # Пауза между запросами к разным банкам
+            time.sleep(10)
 
-        # Отправка накопленного кэша в ГАС
         if master_cache:
             try:
                 payload = list(master_cache.values())
@@ -135,13 +119,20 @@ def parser_loop():
             except Exception as e:
                 print(f"--- ОШИБКА POST: {e} ---")
 
-        # ИНТЕРВАЛ 14 МИНУТ (840 секунд)
-        print(f"Ожидание следующего круга: 14 минут... (до {datetime.fromtimestamp(time.time()+840).strftime('%H:%M:%S')})")
+        print(f"Сплю 14 минут... (до {datetime.fromtimestamp(time.time()+840).strftime('%H:%M:%S')})")
         time.sleep(840)
 
+# --- ИНИЦИАЛИЗАЦИЯ FLASK И ЗАПУСК ПОТОКА ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return f"Currency Parser is Active. Server time: {datetime.now().strftime('%H:%M:%S')}"
+
+# ГЛАВНЫЙ ФИКС: Запускаем парсер как демонический поток прямо здесь, 
+# чтобы Gunicorn активировал его при загрузке файла app.py
+bg_thread = Thread(target=parser_loop, daemon=True)
+bg_thread.start()
+
 if __name__ == "__main__":
-    # Запуск веб-сервера для Koyeb Health Check
-    Thread(target=run_web).start()
-    
-    # Запуск парсера
-    parser_loop()
+    app.run(host='0.0.0.0', port=8080)
