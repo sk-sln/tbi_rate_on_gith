@@ -77,6 +77,7 @@ def get_bog():
         h = HEADERS.copy()
         h.update({"Referer": "https://bankofgeorgia.ge/en/main/currencies"})
         r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=h, timeout=25)
+        print(f"DEBUG BOG: {r.json()[:1]}") # Печатаем первый элемент ответа
         items = r.json()
         now = get_now_ms()
         
