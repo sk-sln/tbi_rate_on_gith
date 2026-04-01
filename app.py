@@ -43,8 +43,8 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_all_myfin():
-    """Парсер MyFin: работает по структуре organizations -> best -> USD/EUR"""
-    print("  [>] MyFin: Запрос к API (структура organizations)...")
+    """Универсальный парсер MyFin: собирает Банки и МФО динамически"""
+    print("  [>] MyFin: Сбор данных по Банкам и МФО...")
     try:
         headers = HEADERS.copy()
         headers.update({
@@ -52,45 +52,47 @@ def get_all_myfin():
             "Content-Type": "application/json",
             "Origin": "https://myfin.ge"
         })
-        payload = {"city": "tbilisi", "includeOnline": True, "availability": "All"}
+        # Оставляем includeOnline: False, так как мы договорились пока без онлайна
+        payload = {"city": "tbilisi", "includeOnline": False, "availability": "All"}
         
         r = requests.post("https://myfin.ge/api/exchangeRates", json=payload, headers=headers, timeout=20)
         
         if r.status_code != 200:
-            print(f"  [!] MyFin API Error: {r.status_code}")
             return []
 
         raw_json = r.json()
-        
-        # Согласно твоему файлу, список банков лежит в 'organizations'
         orgs = raw_json.get('organizations', [])
         
         if not orgs:
-            print("  [-] MyFin: Список 'organizations' не найден в ответе.")
             return []
 
         now = get_now_ms()
         results = []
         
-        # Список банков, которые нам нужны (проверяем по "en")
-        target_banks = ["BasisBank", "Terabank", "Liberty Bank", "Credo Bank"]
+        # Разрешенные типы по твоему запросу
+        allowed_types = ["Bank", "MicrofinanceOrganization"]
 
         for item in orgs:
             if not isinstance(item, dict):
                 continue
 
-            # Извлекаем имя из name -> en
+            # Фильтр по типу организации
+            if item.get('type') not in allowed_types:
+                continue
+
+            # Берем официальное английское название из name -> en
             name_obj = item.get('name', {})
-            bank_en_name = name_obj.get('en') if isinstance(name_obj, dict) else None
+            org_en_name = name_obj.get('en') if isinstance(name_obj, dict) else None
             
-            if bank_en_name in target_banks:
-                record = create_record(bank_en_name, False, now)
+            if org_en_name:
+                # Создаем запись. Имя будет в точности как в MyFin
+                record = create_record(org_en_name, False, now)
                 
-                # КУРСЫ: Согласно твоему примеру, они лежат в ключе 'best'
-                bank_rates = item.get('best', {})
-                if isinstance(bank_rates, dict):
-                    usd = bank_rates.get('USD', {})
-                    eur = bank_rates.get('EUR', {})
+                # Данные курсов из ключа 'best'
+                org_rates = item.get('best', {})
+                if isinstance(org_rates, dict):
+                    usd = org_rates.get('USD', {})
+                    eur = org_rates.get('EUR', {})
 
                     if isinstance(usd, dict):
                         record["usd_buy"] = clean_val(usd.get('buy'))
@@ -103,12 +105,12 @@ def get_all_myfin():
                 results.append(record)
 
         if results:
-            print(f"  [+] MyFin: Успешно получено банков: {len(results)}")
+            print(f"  [+] MyFin: Успешно обработано организаций: {len(results)}")
         
         return results
 
     except Exception as e:
-        print(f"  [-] Ошибка MyFin (финальная итерация): {e}")
+        print(f"  [-] Ошибка MyFin (Bank + MFO): {e}")
         return []
 
 def get_tbc():
