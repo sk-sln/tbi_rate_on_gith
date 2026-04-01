@@ -45,7 +45,6 @@ def get_error_placeholder(bank_name, is_online=False):
 
 def get_all_myfin():
     try:
-        # 1. Заголовки (имитируем браузер, зашедший на MyFin)
         headers = HEADERS.copy()
         headers.update({
             "Referer": "https://myfin.ge/en/rates/tbilisi/all",
@@ -53,7 +52,6 @@ def get_all_myfin():
             "Origin": "https://myfin.ge"
         })
 
-        # 2. Тот самый Payload, который ты нашел
         payload = {
             "city": "tbilisi",
             "includeOnline": True,
@@ -61,8 +59,6 @@ def get_all_myfin():
         }
 
         api_url = "https://myfin.ge/api/exchangeRates"
-        
-        # Делаем POST запрос
         r = requests.post(api_url, json=payload, headers=headers, timeout=20)
         
         if r.status_code != 200:
@@ -71,27 +67,26 @@ def get_all_myfin():
 
         data = r.json()
         
-        # Проверка структуры (Протокол 3.0)
-        if not isinstance(data, list):
-            print(f"[!] MyFin вернул не список, а: {type(data)}")
-            return []
+        # --- ЭТАП РАЗВЕДКИ (ЛОГИРОВАНИЕ) ---
+        if isinstance(data, list) and len(data) > 0:
+            print(f"[!] РАЗВЕДКА MyFin: Первый банк в списке: {data[0]}")
+        # ----------------------------------
 
         now = get_now_ms()
         results = []
 
-        # Нам нужны только конкретные банки из этого огромного списка
-        # Список названий, как они приходят от MyFin (нужно будет уточнить в логах)
+        # Пока добавим только Liberty и Credo для теста, 
+        # когда увидим точные имена в логах — расширим список.
         target_banks = ["Liberty Bank", "Credo Bank", "BasisBank", "Terabank"]
 
         for item in data:
-            bank_name = item.get('bankName')
+            # Предполагаем названия полей, исходя из стандартов API
+            b_name = item.get('bankName') or item.get('name')
             
-            if bank_name in target_banks:
-                # Создаем запись для филиала
-                record = create_record(bank_name, False, now)
+            if b_name in target_banks:
+                record = create_record(b_name, False, now)
                 
-                # Ищем курсы USD и EUR в присланном объекте
-                # Обычно у агрегаторов ключи простые: usdBuy, eurSell и т.д.
+                # Извлекаем курсы (структуру уточним после логов)
                 rates = item.get('rates', {})
                 usd = rates.get('USD', {})
                 eur = rates.get('EUR', {})
@@ -103,13 +98,11 @@ def get_all_myfin():
                 
                 results.append(record)
 
-        print(f"[+] MyFin успешно обработал {len(results)} банков.")
         return results
 
     except Exception as e:
-        print(f"[-] Ошибка MyFin API: {e}")
+        print(f"[-] Ошибка MyFin разведки: {e}")
         return []
-
 
 def get_tbc():
     try:
