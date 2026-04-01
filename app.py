@@ -27,9 +27,8 @@ def clean_val(val):
     if v in ["", "None", "N/A", "undefined", "0", "0.0", "null"]: return "N/A"
     return v.replace(',', '.')
 
-# === ГЛАВНОЕ ИСПРАВЛЕНИЕ: ЖЕСТКАЯ СХЕМА ДАННЫХ ===
 def create_record(bank_name, is_online, timestamp):
-    """Гарантирует, что ключи usd_buy всегда существуют, предотвращая undefined в GAS"""
+    """Гарантирует жесткую схему данных согласно Паспорту"""
     return {
         "bank": str(bank_name),
         "is_online": bool(is_online),
@@ -44,6 +43,7 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_all_myfin():
+    """Агрегатор MyFin - основной хаб для Liberty, Credo и др."""
     try:
         headers = HEADERS.copy()
         headers.update({
@@ -51,13 +51,8 @@ def get_all_myfin():
             "Content-Type": "application/json",
             "Origin": "https://myfin.ge"
         })
-
-        payload = {
-            "city": "tbilisi",
-            "includeOnline": True,
-            "availability": "All"
-        }
-
+        payload = {"city": "tbilisi", "includeOnline": True, "availability": "All"}
+        
         api_url = "https://myfin.ge/api/exchangeRates"
         r = requests.post(api_url, json=payload, headers=headers, timeout=20)
         
@@ -67,26 +62,19 @@ def get_all_myfin():
 
         data = r.json()
         
-        # --- ЭТАП РАЗВЕДКИ (ЛОГИРОВАНИЕ) ---
+        # РАЗВЕДКА: Позволит нам увидеть реальные ключи в логах Koyeb
         if isinstance(data, list) and len(data) > 0:
-            print(f"[!] РАЗВЕДКА MyFin: Первый банк в списке: {data[0]}")
-        # ----------------------------------
+            print(f"[!] РАЗВЕДКА MyFin (первый объект): {data[0]}")
 
         now = get_now_ms()
         results = []
-
-        # Пока добавим только Liberty и Credo для теста, 
-        # когда увидим точные имена в логах — расширим список.
+        # Список банков, которые мы берем ИМЕННО из MyFin
         target_banks = ["Liberty Bank", "Credo Bank", "BasisBank", "Terabank"]
 
         for item in data:
-            # Предполагаем названия полей, исходя из стандартов API
             b_name = item.get('bankName') or item.get('name')
-            
             if b_name in target_banks:
                 record = create_record(b_name, False, now)
-                
-                # Извлекаем курсы (структуру уточним после логов)
                 rates = item.get('rates', {})
                 usd = rates.get('USD', {})
                 eur = rates.get('EUR', {})
@@ -95,13 +83,10 @@ def get_all_myfin():
                 record["usd_sell"] = clean_val(usd.get('sell'))
                 record["eur_buy"] = clean_val(eur.get('buy'))
                 record["eur_sell"] = clean_val(eur.get('sell'))
-                
                 results.append(record)
-
         return results
-
     except Exception as e:
-        print(f"[-] Ошибка MyFin разведки: {e}")
+        print(f"[-] Ошибка MyFin: {e}")
         return []
 
 def get_tbc():
@@ -112,17 +97,13 @@ def get_tbc():
             "Origin": "https://www.tbcbank.ge",
             "Accept": "application/json",
         })
-        
         api_url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
-        
         r = requests.get(api_url, headers=api_headers, timeout=20)
         if r.status_code != 200:
             return [get_error_placeholder("TBC Bank", False)]
         
         raw_data = r.json()
-        # Извлекаем список из ключа 'rates', который мы увидели в логах
         rates_list = raw_data.get('rates', [])
-        
         now = get_now_ms()
         branch = create_record("TBC Bank", False, now)
 
@@ -134,12 +115,9 @@ def get_tbc():
             elif iso == 'EUR':
                 branch["eur_buy"] = clean_val(item.get('buyRate'))
                 branch["eur_sell"] = clean_val(item.get('sellRate'))
-
-        print(f"[+] TBC Успех! USD: {branch['usd_buy']}/{branch['usd_sell']}")
         return [branch]
-        
     except Exception as e:
-        print(f"[-] Ошибка в финальном get_tbc: {e}")
+        print(f"[-] Ошибка TBC: {e}")
         return [get_error_placeholder("TBC Bank", False)]
 
 def get_bog():
@@ -150,9 +128,7 @@ def get_bog():
         if r.status_code != 200: return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
         
         data = r.json()
-        # Расширенный поиск массива (BoG иногда меняет ключи)
         items = data if isinstance(data, list) else data.get('currencies', data.get('data', []))
-        
         now = get_now_ms()
         branch = create_record("Bank of Georgia", False, now)
         online = create_record("Bank of Georgia", True, now)
@@ -175,7 +151,7 @@ def get_bog():
         return [get_error_placeholder("Bank of Georgia", False), get_error_placeholder("Bank of Georgia", True)]
 
 def get_credo():
-    time.sleep(random.uniform(3, 6))
+    """Индивидуальный парсер (резервный)"""
     try:
         r = requests.get("https://credobank.ge/en/exchange-rates/", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -192,6 +168,7 @@ def get_credo():
     except Exception: return [get_error_placeholder("Credo Bank", False)]
 
 def get_liberty():
+    """Индивидуальный парсер (резервный)"""
     try:
         r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=25)
         soup = BeautifulSoup(r.text, 'html.parser')
@@ -243,11 +220,12 @@ def send_to_gas(data_list):
 
 def parser_loop():
     global master_cache
-    time.sleep(10) 
+    time.sleep(5) 
     
     while True:
         print(f"--- ЦИКЛ ПАРСИНГА СТАРТ: {datetime.now().strftime('%H:%M:%S')} ---")
-        parsers = [get_tbc, get_bog, get_credo, get_liberty, get_rico]
+        # В список добавлены и старые парсеры, и новый MyFin
+        parsers = [get_tbc, get_bog, get_rico, get_credo, get_liberty, get_all_myfin]
         
         for f in parsers:
             try:
