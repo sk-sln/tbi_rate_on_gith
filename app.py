@@ -43,70 +43,81 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_all_myfin():
+    """Агрегатор MyFin - исправлен под структуру Dictionary"""
     try:
-        # 1. Заголовки (имитируем браузер, зашедший на MyFin)
         headers = HEADERS.copy()
         headers.update({
             "Referer": "https://myfin.ge/en/rates/tbilisi/all",
             "Content-Type": "application/json",
             "Origin": "https://myfin.ge"
         })
-
-        # 2. Тот самый Payload, который ты нашел
-        payload = {
-            "city": "tbilisi",
-            "includeOnline": True,
-            "availability": "All"
-        }
-
-        api_url = "https://myfin.ge/api/exchangeRates"
+        payload = {"city": "tbilisi", "includeOnline": True, "availability": "All"}
         
-        # Делаем POST запрос
+        api_url = "https://myfin.ge/api/exchangeRates"
         r = requests.post(api_url, json=payload, headers=headers, timeout=20)
         
         if r.status_code != 200:
-            print(f"[-] MyFin API error: {r.status_code}")
             return []
 
-        data = r.json()
+        raw_json = r.json()
         
-        # Проверка структуры (Протокол 3.0)
-        if not isinstance(data, list):
-            print(f"[!] MyFin вернул не список, а: {type(data)}")
+        # --- НОВАЯ ЛОГИКА ИЗВЛЕЧЕНИЯ (ПРОТОКОЛ 3.0) ---
+        # Проверяем, где лежат данные: в ключе 'data', 'banks' или это сам корень
+        if isinstance(raw_json, dict):
+            # Судя по логам, данные могут быть в ключе 'data' или аналогичном
+            # Если в корне есть 'best', значит банки лежат в другом ключе рядом
+            data_list = raw_json.get('data', raw_json.get('rates', []))
+            
+            # Если и там пусто, но это словарь - возможно нам пришел объект с метаданными
+            if not data_list and not isinstance(raw_json, list):
+                 # Если мы не нашли список в 'data', попробуем поискать любой список в объекте
+                 for key in raw_json:
+                     if isinstance(raw_json[key], list):
+                         data_list = raw_json[key]
+                         break
+        else:
+            data_list = raw_json
+
+        if not isinstance(data_list, list):
+            print(f"[-] MyFin: Не удалось найти список банков в ответе.")
             return []
+        # ----------------------------------------------
 
         now = get_now_ms()
         results = []
-
-        # Нам нужны только конкретные банки из этого огромного списка
-        # Список названий, как они приходят от MyFin (нужно будет уточнить в логах)
+        # Имена банков для фильтрации
         target_banks = ["Liberty Bank", "Credo Bank", "BasisBank", "Terabank"]
 
-        for item in data:
-            bank_name = item.get('bankName')
-            
-            if bank_name in target_banks:
-                # Создаем запись для филиала
-                record = create_record(bank_name, False, now)
-                
-                # Ищем курсы USD и EUR в присланном объекте
-                # Обычно у агрегаторов ключи простые: usdBuy, eurSell и т.д.
-                rates = item.get('rates', {})
-                usd = rates.get('USD', {})
-                eur = rates.get('EUR', {})
+        for item in data_list:
+            if not isinstance(item, dict): continue
 
-                record["usd_buy"] = clean_val(usd.get('buy'))
-                record["usd_sell"] = clean_val(usd.get('sell'))
-                record["eur_buy"] = clean_val(eur.get('buy'))
-                record["eur_sell"] = clean_val(eur.get('sell'))
+            b_name = item.get('bankName') or item.get('name')
+            
+            if b_name in target_banks:
+                record = create_record(b_name, False, now)
+                
+                # Извлекаем курсы
+                r_data = item.get('rates', {})
+                usd = r_data.get('USD', {})
+                eur = r_data.get('EUR', {})
+
+                if isinstance(usd, dict):
+                    record["usd_buy"] = clean_val(usd.get('buy'))
+                    record["usd_sell"] = clean_val(usd.get('sell'))
+                
+                if isinstance(eur, dict):
+                    record["eur_buy"] = clean_val(eur.get('buy'))
+                    record["eur_sell"] = clean_val(eur.get('sell'))
                 
                 results.append(record)
 
-        print(f"[+] MyFin успешно обработал {len(results)} банков.")
+        if results:
+            print(f"[+] MyFin: Успешно добавлено {len(results)} банков.")
+        
         return results
 
     except Exception as e:
-        print(f"[-] Ошибка MyFin API: {e}")
+        print(f"[-] Ошибка MyFin (фикс структуры): {e}")
         return []
 
 def get_tbc():
