@@ -43,6 +43,74 @@ def get_error_placeholder(bank_name, is_online=False):
 
 # --- ПАРСЕРЫ ---
 
+def get_all_myfin():
+    try:
+        # 1. Заголовки (имитируем браузер, зашедший на MyFin)
+        headers = HEADERS.copy()
+        headers.update({
+            "Referer": "https://myfin.ge/en/rates/tbilisi/all",
+            "Content-Type": "application/json",
+            "Origin": "https://myfin.ge"
+        })
+
+        # 2. Тот самый Payload, который ты нашел
+        payload = {
+            "city": "tbilisi",
+            "includeOnline": True,
+            "availability": "All"
+        }
+
+        api_url = "https://myfin.ge/api/exchangeRates"
+        
+        # Делаем POST запрос
+        r = requests.post(api_url, json=payload, headers=headers, timeout=20)
+        
+        if r.status_code != 200:
+            print(f"[-] MyFin API error: {r.status_code}")
+            return []
+
+        data = r.json()
+        
+        # Проверка структуры (Протокол 3.0)
+        if not isinstance(data, list):
+            print(f"[!] MyFin вернул не список, а: {type(data)}")
+            return []
+
+        now = get_now_ms()
+        results = []
+
+        # Нам нужны только конкретные банки из этого огромного списка
+        # Список названий, как они приходят от MyFin (нужно будет уточнить в логах)
+        target_banks = ["Liberty Bank", "Credo Bank", "BasisBank", "Terabank"]
+
+        for item in data:
+            bank_name = item.get('bankName')
+            
+            if bank_name in target_banks:
+                # Создаем запись для филиала
+                record = create_record(bank_name, False, now)
+                
+                # Ищем курсы USD и EUR в присланном объекте
+                # Обычно у агрегаторов ключи простые: usdBuy, eurSell и т.д.
+                rates = item.get('rates', {})
+                usd = rates.get('USD', {})
+                eur = rates.get('EUR', {})
+
+                record["usd_buy"] = clean_val(usd.get('buy'))
+                record["usd_sell"] = clean_val(usd.get('sell'))
+                record["eur_buy"] = clean_val(eur.get('buy'))
+                record["eur_sell"] = clean_val(eur.get('sell'))
+                
+                results.append(record)
+
+        print(f"[+] MyFin успешно обработал {len(results)} банков.")
+        return results
+
+    except Exception as e:
+        print(f"[-] Ошибка MyFin API: {e}")
+        return []
+
+
 def get_tbc():
     try:
         api_headers = HEADERS.copy()
