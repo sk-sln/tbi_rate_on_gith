@@ -43,18 +43,25 @@ def get_error_placeholder(bank_name, is_online=False):
 # --- ПАРСЕРЫ ---
 
 def get_all_myfin():
-    """Агрегатор MyFin с системой защиты и микроскопом для дебага"""
     try:
+        # 1. Заголовки (имитируем браузер, зашедший на MyFin)
         headers = HEADERS.copy()
         headers.update({
             "Referer": "https://myfin.ge/en/rates/tbilisi/all",
             "Content-Type": "application/json",
             "Origin": "https://myfin.ge"
         })
-        # Payload, который мы нашли в панели разработчика
-        payload = {"city": "tbilisi", "includeOnline": True, "availability": "All"}
-        
+
+        # 2. Тот самый Payload, который ты нашел
+        payload = {
+            "city": "tbilisi",
+            "includeOnline": True,
+            "availability": "All"
+        }
+
         api_url = "https://myfin.ge/api/exchangeRates"
+        
+        # Делаем POST запрос
         r = requests.post(api_url, json=payload, headers=headers, timeout=20)
         
         if r.status_code != 200:
@@ -63,58 +70,43 @@ def get_all_myfin():
 
         data = r.json()
         
-        # ПРОВЕРКА 1: Является ли весь ответ списком?
+        # Проверка структуры (Протокол 3.0)
         if not isinstance(data, list):
-            print(f"[!!!] МИКРОСКОП: Ответ API не список, а {type(data)}")
-            print(f"[!!!] ТЕКСТ ОТВЕТА: {str(data)[:500]}") # Печатаем начало ответа
+            print(f"[!] MyFin вернул не список, а: {type(data)}")
             return []
 
         now = get_now_ms()
         results = []
-        
-        # Список целевых банков (имена сверяем по результатам разведки)
+
+        # Нам нужны только конкретные банки из этого огромного списка
+        # Список названий, как они приходят от MyFin (нужно будет уточнить в логах)
         target_banks = ["Liberty Bank", "Credo Bank", "BasisBank", "Terabank"]
 
-        for index, item in enumerate(data):
-            # --- ЛОГИКА МИКРОСКОПА (ЗАЩИТА ОТ 'str' object error) ---
-            if not isinstance(item, dict):
-                print(f"[!!!] МИКРОСКОП: Элемент №{index} — это СТРОКА вместо словаря!")
-                print(f"[!!!] СОДЕРЖИМОЕ СТРОКИ: '{item}'")
-                continue # Пропускаем мусор и идем к следующему банку
-            # -------------------------------------------------------
-
-            # Теперь безопасно используем .get(), так как мы уверены, что item - это dict
-            b_name = item.get('bankName') or item.get('name')
+        for item in data:
+            bank_name = item.get('bankName')
             
-            if b_name in target_banks:
-                record = create_record(b_name, False, now)
+            if bank_name in target_banks:
+                # Создаем запись для филиала
+                record = create_record(bank_name, False, now)
                 
-                # Безопасно извлекаем вложенные данные курсов
-                rates = item.get('rates')
-                if isinstance(rates, dict):
-                    usd = rates.get('USD')
-                    eur = rates.get('EUR')
+                # Ищем курсы USD и EUR в присланном объекте
+                # Обычно у агрегаторов ключи простые: usdBuy, eurSell и т.д.
+                rates = item.get('rates', {})
+                usd = rates.get('USD', {})
+                eur = rates.get('EUR', {})
 
-                    if isinstance(usd, dict):
-                        record["usd_buy"] = clean_val(usd.get('buy'))
-                        record["usd_sell"] = clean_val(usd.get('sell'))
-                    
-                    if isinstance(eur, dict):
-                        record["eur_buy"] = clean_val(eur.get('buy'))
-                        record["eur_sell"] = clean_val(eur.get('sell'))
+                record["usd_buy"] = clean_val(usd.get('buy'))
+                record["usd_sell"] = clean_val(usd.get('sell'))
+                record["eur_buy"] = clean_val(eur.get('buy'))
+                record["eur_sell"] = clean_val(eur.get('sell'))
                 
                 results.append(record)
 
-        if results:
-            print(f"[+] MyFin: Успешно извлечено {len(results)} банков из списка агрегатора.")
-        
+        print(f"[+] MyFin успешно обработал {len(results)} банков.")
         return results
 
     except Exception as e:
-        # Если что-то все же пошло не так, печатаем детальную ошибку
-        print(f"[-] Критическая ошибка в get_all_myfin: {e}")
-        import traceback
-        traceback.print_exc() # Выведет точную строку, где случился баг
+        print(f"[-] Ошибка MyFin API: {e}")
         return []
 
 def get_tbc():
