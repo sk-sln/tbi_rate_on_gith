@@ -150,7 +150,7 @@ from bs4 import BeautifulSoup
 import time
 
 def get_liberty():
-    # Инициализируем объект по нашей схеме (Default/Error state)
+    # Инициализируем объект по нашей схеме
     data = {
         "bank": "Liberty Bank",
         "is_online": False,
@@ -158,60 +158,51 @@ def get_liberty():
         "usd_sell": "N/A",
         "eur_buy": "N/A",
         "eur_sell": "N/A",
-        "updated_at_ms": get_now_ms() # Используем твою функцию для консистентности
+        "updated_at_ms": get_now_ms()
     }
     
     url = "https://libertybank.ge/en/"
-    # Используем общие HEADERS из настроек твоего файла
+    
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        # Увеличиваем таймаут и используем общие заголовки
+        response = requests.get(url, headers=HEADERS, timeout=20)
         if response.status_code != 200:
-            return [data] # Возвращаем список с N/A при ошибке связи
+            return [data]
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Находим основной контейнер виджета
-        widget = soup.find('div', id='currencyrates1')
-        if not widget:
-            return [data]
-
-        # Находим все строки валют (USD, EUR и т.д.)
-        rows = widget.find_all('div', class_='currency-rates__row')
+        # Ищем все строки валют. Класс 'js-homepage__currency-item' самый стабильный
+        rows = soup.find_all('div', class_='js-homepage__currency-item')
         
         for row in rows:
-            # Ищем название валюты внутри строки
+            # Определяем валюту
             name_tag = row.find('span', class_='currency-rates__info-name')
             if not name_tag:
                 continue
             
             currency_name = name_tag.text.strip().upper()
             
-            # Находим блоки со значениями (Buy/Sell)
-            # В коде страницы второй блок 'currency-rates__item' содержит коммерческие курсы
-            items = row.find_all('div', class_='currency-rates__item')
-            if len(items) < 2:
-                continue
-                
-            # Коммерческие курсы лежат во втором блоке (индекс 1)
-            # Применяем твою функцию clean_val для очистки значений
-            spans = items[1].find_all('span', class_='currency caps bold')
+            # Находим все значения курсов в этой строке
+            # По коду: первые два значения - это всегда Branch (Commercial)
+            vals = row.find_all('span', class_='currency caps bold')
             
-            if len(spans) >= 2:
-                buy_val = clean_val(spans[0].text)
-                sell_val = clean_val(spans[1].text)
+            if len(vals) >= 2:
+                # Берем самые первые два числа в строке - это покупка и продажа в кассе
+                buy_val = clean_val(vals[0].text)
+                sell_val = clean_val(vals[1].text)
                 
-                if currency_name == "USD":
+                if "USD" in currency_name:
                     data["usd_buy"] = buy_val
                     data["usd_sell"] = sell_val
-                elif currency_name == "EUR":
+                elif "EUR" in currency_name:
                     data["eur_buy"] = buy_val
                     data["eur_sell"] = sell_val
 
-        return [data] # Успешно возвращаем список с одним объектом
+        return [data]
 
     except Exception as e:
-        print(f"  [!] Ошибка Liberty Bank: {e}")
-        return [data] # Возвращаем список с N/A в случае исключения
+        print(f"  [!] Ошибка Liberty Bank (детально): {e}")
+        return [data]
 
 
 def get_bog():
