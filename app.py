@@ -144,6 +144,76 @@ def get_tbc():
         print(f"[-] Ошибка TBC: {e}")
         return [get_error_placeholder("TBC Bank", False)]
 
+
+import requests
+from bs4 import BeautifulSoup
+import time
+
+def get_liberty():
+    # Инициализируем объект по нашей схеме (Default/Error state)
+    data = {
+        "bank": "Liberty Bank",
+        "is_online": False,
+        "usd_buy": "N/A",
+        "usd_sell": "N/A",
+        "eur_buy": "N/A",
+        "eur_sell": "N/A",
+        "updated_at_ms": get_now_ms() # Используем твою функцию для консистентности
+    }
+    
+    url = "https://libertybank.ge/en/"
+    # Используем общие HEADERS из настроек твоего файла
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            return [data] # Возвращаем список с N/A при ошибке связи
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Находим основной контейнер виджета
+        widget = soup.find('div', id='currencyrates1')
+        if not widget:
+            return [data]
+
+        # Находим все строки валют (USD, EUR и т.д.)
+        rows = widget.find_all('div', class_='currency-rates__row')
+        
+        for row in rows:
+            # Ищем название валюты внутри строки
+            name_tag = row.find('span', class_='currency-rates__info-name')
+            if not name_tag:
+                continue
+            
+            currency_name = name_tag.text.strip().upper()
+            
+            # Находим блоки со значениями (Buy/Sell)
+            # В коде страницы второй блок 'currency-rates__item' содержит коммерческие курсы
+            items = row.find_all('div', class_='currency-rates__item')
+            if len(items) < 2:
+                continue
+                
+            # Коммерческие курсы лежат во втором блоке (индекс 1)
+            # Применяем твою функцию clean_val для очистки значений
+            spans = items[1].find_all('span', class_='currency caps bold')
+            
+            if len(spans) >= 2:
+                buy_val = clean_val(spans[0].text)
+                sell_val = clean_val(spans[1].text)
+                
+                if currency_name == "USD":
+                    data["usd_buy"] = buy_val
+                    data["usd_sell"] = sell_val
+                elif currency_name == "EUR":
+                    data["eur_buy"] = buy_val
+                    data["eur_sell"] = sell_val
+
+        return [data] # Успешно возвращаем список с одним объектом
+
+    except Exception as e:
+        print(f"  [!] Ошибка Liberty Bank: {e}")
+        return [data] # Возвращаем список с N/A в случае исключения
+
+
 def get_bog():
     try:
         h = HEADERS.copy()
@@ -191,26 +261,7 @@ def get_credo():
         return [res] if found else [get_error_placeholder("Credo Bank", False)]
     except Exception: return [get_error_placeholder("Credo Bank", False)]
 
-def get_liberty():
-    """Индивидуальный парсер (резервный)"""
-    try:
-        r = requests.get("https://libertybank.ge/en/kursi", headers=HEADERS, timeout=25)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        res = create_record("Liberty Bank", False, get_now_ms())
-        items = soup.find_all('div', class_='currency-item')
-        for item in items:
-            code_div = item.find('div', class_='currency-code')
-            code = code_div.text.strip() if code_div else ""
-            vals = item.find_all('div', class_='currency-value')
-            if len(vals) >= 2:
-                if 'USD' in code: 
-                    res["usd_buy"] = clean_val(vals[0].text)
-                    res["usd_sell"] = clean_val(vals[1].text)
-                elif 'EUR' in code: 
-                    res["eur_buy"] = clean_val(vals[0].text)
-                    res["eur_sell"] = clean_val(vals[1].text)
-        return [res]
-    except Exception: return [get_error_placeholder("Liberty Bank", False)]
+
 
 def get_rico():
     try:
