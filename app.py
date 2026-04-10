@@ -150,58 +150,68 @@ from bs4 import BeautifulSoup
 import time
 
 def get_liberty():
-    # Инициализируем объект по нашей схеме
     data = {
         "bank": "Liberty Bank",
         "is_online": False,
-        "usd_buy": "N/A",
-        "usd_sell": "N/A",
-        "eur_buy": "N/A",
-        "eur_sell": "N/A",
+        "usd_buy": "N/A", "usd_sell": "N/A",
+        "eur_buy": "N/A", "eur_sell": "N/A",
         "updated_at_ms": get_now_ms()
     }
     
     url = "https://libertybank.ge/en/"
     
+    # Расширенные заголовки для обхода защиты
+    liberty_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
     try:
-        # Увеличиваем таймаут и используем общие заголовки
-        response = requests.get(url, headers=HEADERS, timeout=20)
+        # Используем сессию для сохранения кук
+        session = requests.Session()
+        response = session.get(url, headers=liberty_headers, timeout=25)
+        
         if response.status_code != 200:
             return [data]
 
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Ищем все строки валют. Класс 'js-homepage__currency-item' самый стабильный
-        rows = soup.find_all('div', class_='js-homepage__currency-item')
+        # В твоем liberty.txt данные лежат в блоках с классом 'currency-rates__row'
+        # Мы будем искать их внутри конкретного контейнера
+        container = soup.find('div', {'id': 'currencyrates1'}) or soup
+        rows = container.find_all('div', class_='currency-rates__row')
         
         for row in rows:
-            # Определяем валюту
             name_tag = row.find('span', class_='currency-rates__info-name')
             if not name_tag:
                 continue
             
-            currency_name = name_tag.text.strip().upper()
+            curr_name = name_tag.get_text(strip=True).upper()
             
-            # Находим все значения курсов в этой строке
-            # По коду: первые два значения - это всегда Branch (Commercial)
-            vals = row.find_all('span', class_='currency caps bold')
+            # В структуре Liberty (из файла) курсы лежат в блоках 'currency-rates__item'
+            # Первые два span с классом 'currency' внутри этих блоков — это Branch Buy/Sell
+            spans = row.find_all('span', class_='currency')
             
-            if len(vals) >= 2:
-                # Берем самые первые два числа в строке - это покупка и продажа в кассе
-                buy_val = clean_val(vals[0].text)
-                sell_val = clean_val(vals[1].text)
+            if len(spans) >= 2:
+                # Очищаем текст от лишних символов (иногда там бывают невидимые пробелы)
+                buy = clean_val(spans[0].get_text(strip=True))
+                sell = clean_val(spans[1].get_text(strip=True))
                 
-                if "USD" in currency_name:
-                    data["usd_buy"] = buy_val
-                    data["usd_sell"] = sell_val
-                elif "EUR" in currency_name:
-                    data["eur_buy"] = buy_val
-                    data["eur_sell"] = sell_val
+                if "USD" in curr_name:
+                    data["usd_buy"] = buy
+                    data["usd_sell"] = sell
+                elif "EUR" in curr_name:
+                    data["eur_buy"] = buy
+                    data["eur_sell"] = sell
 
         return [data]
 
     except Exception as e:
-        print(f"  [!] Ошибка Liberty Bank (детально): {e}")
+        print(f"  [!] Критическая ошибка Liberty: {e}")
         return [data]
 
 
