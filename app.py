@@ -97,75 +97,54 @@ def get_liberty():
 import random
 
 def get_all_myfin():
-    print("  [>] MyFin: Сбор данных (имитация браузера)...")
+    print("  [>] MyFin: Запуск WebKit (Обход 403 через Playwright)...")
+    results = []
+    now = get_now_ms()
     
-    # Расширенные заголовки для имитации Chrome
-    human_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Content-Type": "application/json",
-        "Origin": "https://myfin.ge",
-        "Referer": "https://myfin.ge/en/exchange-rates/tbilisi",
-        "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "Connection": "keep-alive"
-    }
-
     try:
-        # Небольшая случайная пауза перед запросом (0.5 - 2 сек)
-        time.sleep(random.uniform(0.5, 2.0))
-        
-        session = requests.Session()
-        # Сначала "заходим" на главную, чтобы получить куки (опционально, но полезно)
-        session.get("https://myfin.ge/en/exchange-rates/tbilisi", headers=human_headers, timeout=15)
-        
-        payload = {
-            "city": "tbilisi", 
-            "includeOnline": False, 
-            "availability": "All"
-        }
-        
-        # Основной запрос через сессию
-        r = session.post(
-            "https://myfin.ge/api/exchangeRates", 
-            json=payload, 
-            headers=human_headers, 
-            timeout=25
-        )
-        
-        # Проверяем статус ответа
-        if r.status_code != 200:
-            print(f"  [-] MyFin: Сервер ответил кодом {r.status_code}")
-            return []
-
-        data = r.json()
-        orgs = data.get('organizations', [])
-        now = get_now_ms()
-        results = []
-        
-        for item in orgs:
-            if item.get('type') in ["Bank", "MicrofinanceOrganization"]:
-                name = item.get('name', {}).get('en')
-                if name:
-                    rec = create_record(name, False, now)
-                    rates = item.get('best', {})
-                    usd, eur = rates.get('USD', {}), rates.get('EUR', {})
-                    rec["usd_buy"], rec["usd_sell"] = clean_val(usd.get('buy')), clean_val(usd.get('sell'))
-                    rec["eur_buy"], rec["eur_sell"] = clean_val(eur.get('buy')), clean_val(eur.get('sell'))
-                    results.append(rec)
-        
-        print(f"  [+] MyFin: Успешно собрано {len(results)} организаций")
-        return results
-
+        with sync_playwright() as p:
+            # Используем WebKit, так как он уже проверен на Liberty
+            browser = p.webkit.launch(headless=True)
+            context = browser.new_context(user_agent=HEADERS["User-Agent"])
+            page = context.new_page()
+            
+            # Идем прямо на API URL (или на страницу, если API блокирует)
+            # Попробуем сначала зайти на страницу, чтобы "прогреть" куки
+            page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="networkidle", timeout=60000)
+            
+            # Выполняем скрипт прямо в браузере, чтобы забрать JSON из API MyFin
+            # Это самый надежный способ обойти 403
+            api_script = """
+            async () => {
+                const response = await fetch("https://myfin.ge/api/exchangeRates", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"})
+                });
+                return await response.json();
+            }
+            """
+            data = page.evaluate(api_script)
+            
+            orgs = data.get('organizations', [])
+            for item in orgs:
+                if item.get('type') in ["Bank", "MicrofinanceOrganization"]:
+                    name = item.get('name', {}).get('en')
+                    if name:
+                        rec = create_record(name, False, now)
+                        rates = item.get('best', {})
+                        usd, eur = rates.get('USD', {}), rates.get('EUR', {})
+                        rec["usd_buy"], rec["usd_sell"] = clean_val(usd.get('buy')), clean_val(usd.get('sell'))
+                        rec["eur_buy"], rec["eur_sell"] = clean_val(eur.get('buy')), clean_val(eur.get('sell'))
+                        results.append(rec)
+            
+            browser.close()
+            print(f"  [+] MyFin: OK (Собрано {len(results)} банков)")
+            
     except Exception as e:
-        print(f"  [!] Ошибка MyFin (человекоподобный режим): {e}")
-        return []
-
+        print(f"  [!] Ошибка MyFin через WebKit: {e}")
+        
+    return results
 
 def get_tbc():
     try:
