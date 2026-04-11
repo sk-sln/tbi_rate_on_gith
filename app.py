@@ -1,7 +1,9 @@
 import requests
 from bs4 import BeautifulSoup
 import time
-import json
+import sys
+# Принудительная очистка буфера вывода
+sys.stdout.reconfigure(line_buffering=True)
 import sys
 import os
 from datetime import datetime
