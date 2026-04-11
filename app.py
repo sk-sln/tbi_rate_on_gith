@@ -43,12 +43,13 @@ def create_record(bank_name, is_online, timestamp):
 
 def get_liberty():
     now = get_now_ms()
+    # Создаем запись через твою стандартную функцию
     record = create_record("Liberty Bank", False, now)
     
     print("  [>] Liberty: Запуск WebKit в Docker...")
     try:
         with sync_playwright() as p:
-            # Запускаем WebKit с аргументами для стабильности в контейнере
+            # Настройки запуска для стабильности в контейнере (512MB RAM)
             browser = p.webkit.launch(
                 headless=True,
                 args=[
@@ -59,37 +60,39 @@ def get_liberty():
             )
             
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                user_agent=HEADERS["User-Agent"], # Используем твой глобальный HEADERS
                 viewport={'width': 1280, 'height': 800}
             )
             
             page = context.new_page()
             
-            # Переходим на страницу и ждем загрузки основного контента
+            # Переходим на сайт (таймаут 60 сек для медленного интернета)
             page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
             
-            # Ждем появления элементов с курсами (селектор из твоих прошлых тестов)
+            # Ожидаем отрисовки таблицы курсов
             page.wait_for_selector(".currency-rates__currency", timeout=20000)
             
-            # Извлекаем все тексты курсов
+            # Собираем данные
             all_rates = page.locator(".currency-rates__currency").all_inner_texts()
             
             if len(all_rates) >= 16:
-                # Маппинг по индексам (проверенная структура сайта)
+                # Наполняем record, используя твой clean_val для идентичности данных
                 record["usd_buy"] = clean_val(all_rates[1])
                 record["usd_sell"] = clean_val(all_rates[2])
                 record["eur_buy"] = clean_val(all_rates[14])
                 record["eur_sell"] = clean_val(all_rates[15])
+                
                 print(f"  [+] Liberty: OK (USD: {record['usd_buy']}/{record['usd_sell']})")
             else:
-                print(f"  [-] Liberty: Структура сайта изменилась (найдено элементов: {len(all_rates)})")
+                print(f"  [-] Liberty: Структура сайта изменилась (элементов: {len(all_rates)})")
             
             browser.close()
+            
     except Exception as e:
         print(f"  [!] Ошибка Liberty в Docker: {e}")
+        # В случае ошибки возвращаем record с "N/A" (уже задано в create_record)
     
     return [record]
-
 # --- ОСТАЛЬНЫЕ ПАРСЕРЫ (БЕЗ ИЗМЕНЕНИЙ) ---
 def get_all_myfin():
     print("  [>] MyFin: Сбор данных...")
