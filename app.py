@@ -7,6 +7,7 @@ import sys
 sys.stdout.reconfigure(line_buffering=True)
 import sys
 import os
+import random
 from datetime import datetime
 from flask import Flask
 from threading import Thread
@@ -92,14 +93,61 @@ def get_liberty():
 
 
 # --- ОСТАЛЬНЫЕ ПАРСЕРЫ (БЕЗ ИЗМЕНЕНИЙ) ---
+
+import random
+
 def get_all_myfin():
-    print("  [>] MyFin: Сбор данных...")
+    print("  [>] MyFin: Сбор данных (имитация браузера)...")
+    
+    # Расширенные заголовки для имитации Chrome
+    human_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Content-Type": "application/json",
+        "Origin": "https://myfin.ge",
+        "Referer": "https://myfin.ge/en/exchange-rates/tbilisi",
+        "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Connection": "keep-alive"
+    }
+
     try:
-        payload = {"city": "tbilisi", "includeOnline": False, "availability": "All"}
-        r = requests.post("https://myfin.ge/api/exchangeRates", json=payload, headers=HEADERS, timeout=20)
-        orgs = r.json().get('organizations', [])
+        # Небольшая случайная пауза перед запросом (0.5 - 2 сек)
+        time.sleep(random.uniform(0.5, 2.0))
+        
+        session = requests.Session()
+        # Сначала "заходим" на главную, чтобы получить куки (опционально, но полезно)
+        session.get("https://myfin.ge/en/exchange-rates/tbilisi", headers=human_headers, timeout=15)
+        
+        payload = {
+            "city": "tbilisi", 
+            "includeOnline": False, 
+            "availability": "All"
+        }
+        
+        # Основной запрос через сессию
+        r = session.post(
+            "https://myfin.ge/api/exchangeRates", 
+            json=payload, 
+            headers=human_headers, 
+            timeout=25
+        )
+        
+        # Проверяем статус ответа
+        if r.status_code != 200:
+            print(f"  [-] MyFin: Сервер ответил кодом {r.status_code}")
+            return []
+
+        data = r.json()
+        orgs = data.get('organizations', [])
         now = get_now_ms()
         results = []
+        
         for item in orgs:
             if item.get('type') in ["Bank", "MicrofinanceOrganization"]:
                 name = item.get('name', {}).get('en')
@@ -110,9 +158,14 @@ def get_all_myfin():
                     rec["usd_buy"], rec["usd_sell"] = clean_val(usd.get('buy')), clean_val(usd.get('sell'))
                     rec["eur_buy"], rec["eur_sell"] = clean_val(eur.get('buy')), clean_val(eur.get('sell'))
                     results.append(rec)
+        
+        print(f"  [+] MyFin: Успешно собрано {len(results)} организаций")
         return results
+
     except Exception as e:
-        print(f"  [-] Ошибка MyFin: {e}"); return []
+        print(f"  [!] Ошибка MyFin (человекоподобный режим): {e}")
+        return []
+
 
 def get_tbc():
     try:
