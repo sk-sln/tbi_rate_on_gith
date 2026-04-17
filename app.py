@@ -148,60 +148,51 @@ def get_all_myfin():
 
 
 def get_hashbank():
-    """Парсер для Hash Bank через извлечение __NEXT_DATA__"""
+    """Парсер для Hash Bank через Playwright (WebKit)"""
     url = "https://hashbank.ge/en"
+    now = get_now_ms()
     try:
-        print("  [+] Парсим Hash Bank (JSON extraction)...")
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        if response.status_code != 200: return []
+        print("  [>] Hash Bank: Запуск через Playwright...")
+        with sync_playwright() as p:
+            # Используем ту же логику запуска, что и для Liberty
+            browser = p.webkit.launch(headless=True)
+            context = browser.new_context(user_agent=HEADERS["User-Agent"])
+            page = context.new_page()
+            
+            # Переходим и ждем загрузки основного контента
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            
+            # Вместо поиска в __NEXT_DATA__ (который может быть зашифрован),
+            # берем данные прямо из отрисованных элементов интерфейса
+            # Селекторы основаны на твоем файле 'hash bank.txt'
+            
+            usd_buy = page.locator('div:has-text("USD") + div div:nth-child(1)').first.inner_text()
+            usd_sell = page.locator('div:has-text("USD") + div div:nth-child(2)').first.inner_text()
+            
+            eur_buy = page.locator('div:has-text("EUR") + div div:nth-child(1)').first.inner_text()
+            eur_sell = page.locator('div:has-text("EUR") + div div:nth-child(2)').first.inner_text()
+            
+            browser.close()
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Данные на этом сайте лежат в специальном скрипте
-        next_data_script = soup.find('script', id='__NEXT_DATA__')
-        if not next_data_script:
-            print("  [!] Hash Bank: __NEXT_DATA__ не найден")
+            # Чистим значения через твою функцию clean_val
+            ub, us = clean_val(usd_buy), clean_val(usd_sell)
+            eb, es = clean_val(eur_buy), clean_val(eur_sell)
+
+            if ub != "---" or eb != "---":
+                print(f"  [+] Hash Bank: OK (USD: {ub}/{us})")
+                return [{
+                    "bank": "Hash Bank",
+                    "is_online": False,
+                    "usd_buy": ub, "usd_sell": us,
+                    "eur_buy": eb, "eur_sell": es,
+                    "updated_at_ms": now
+                }]
+            
+            print("  [!] Hash Bank: Данные не найдены на странице")
             return []
-
-        # Парсим JSON внутри скрипта
-        data = json.loads(next_data_script.string)
-        
-        # Путь к валютам в их структуре (может немного меняться, добавлена проверка)
-        # Обычно это: props -> pageProps -> initialState -> exchangeRates
-        try:
-            rates_list = data['props']['pageProps']['initialState']['currency']['exchangeRates']
-        except KeyError:
-            print("  [!] Hash Bank: Структура JSON изменилась")
-            return []
-
-        usd_buy, usd_sell = "---", "---"
-        eur_buy, eur_sell = "---", "---"
-        now = get_now_ms()
-
-        for r in rates_list:
-            code = r.get('code', '').upper()
-            # Берем коммерческие курсы (обычно это поле buy/sell или rates)
-            buy = clean_val(r.get('buy'))
-            sell = clean_val(r.get('sell'))
-
-            if code == "USD":
-                usd_buy, usd_sell = buy, sell
-            elif code == "EUR":
-                eur_buy, eur_sell = buy, sell
-
-        if usd_buy != "---" or eur_buy != "---":
-            print(f"  [✓] Hash Bank: USD {usd_buy}/{usd_sell}")
-            return [{
-                "bank": "Hash Bank",
-                "is_online": False,
-                "usd_buy": usd_buy, "usd_sell": usd_sell,
-                "eur_buy": eur_buy, "eur_sell": eur_sell,
-                "updated_at_ms": now
-            }]
-        
-        return []
+            
     except Exception as e:
-        print(f"  [!] Ошибка Hash Bank: {e}")
+        print(f"  [!] Ошибка Hash Bank (Playwright): {e}")
         return []
 
 
