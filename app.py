@@ -148,58 +148,58 @@ def get_all_myfin():
 
 
 def get_hashbank():
-    """Парсер для Hash Bank (https://hashbank.ge/en)"""
+    """Парсер для Hash Bank через извлечение __NEXT_DATA__"""
     url = "https://hashbank.ge/en"
     try:
-        print("  [+] Парсим Hash Bank...")
-        # Используем сессию для стабильности
-        session = requests.Session()
-        response = session.get(url, headers=HEADERS, timeout=15)
-        if response.statusCode != 200:
-            return []
-            
+        print("  [+] Парсим Hash Bank (JSON extraction)...")
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200: return []
+
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # На сайте Hash Bank курсы лежат в таблице внутри блока 'currency-wrapper'
-        # Находим строки таблицы с валютами
-        rows = soup.find_all('div', class_='currency-item')
+        # Данные на этом сайте лежат в специальном скрипте
+        next_data_script = soup.find('script', id='__NEXT_DATA__')
+        if not next_data_script:
+            print("  [!] Hash Bank: __NEXT_DATA__ не найден")
+            return []
+
+        # Парсим JSON внутри скрипта
+        data = json.loads(next_data_script.string)
         
-        res = []
-        now = get_now_ms()
+        # Путь к валютам в их структуре (может немного меняться, добавлена проверка)
+        # Обычно это: props -> pageProps -> initialState -> exchangeRates
+        try:
+            rates_list = data['props']['pageProps']['initialState']['currency']['exchangeRates']
+        except KeyError:
+            print("  [!] Hash Bank: Структура JSON изменилась")
+            return []
 
         usd_buy, usd_sell = "---", "---"
         eur_buy, eur_sell = "---", "---"
+        now = get_now_ms()
 
-        for row in rows:
-            # Находим название валюты (USD, EUR)
-            name_tag = row.find('div', class_='currency-name')
-            if not name_tag: continue
-            
-            currency_name = name_tag.text.strip().upper()
-            
-            # Находим значения покупки и продажи
-            # Обычно они идут в спанах или дивах с классом 'value'
-            values = row.find_all('div', class_='currency-value')
-            
-            if len(values) >= 2:
-                buy = clean_val(values[0].text)
-                sell = clean_val(values[1].text)
-                
-                if "USD" in currency_name:
-                    usd_buy, usd_sell = buy, sell
-                elif "EUR" in currency_name:
-                    eur_buy, eur_sell = buy, sell
+        for r in rates_list:
+            code = r.get('code', '').upper()
+            # Берем коммерческие курсы (обычно это поле buy/sell или rates)
+            buy = clean_val(r.get('buy'))
+            sell = clean_val(r.get('sell'))
+
+            if code == "USD":
+                usd_buy, usd_sell = buy, sell
+            elif code == "EUR":
+                eur_buy, eur_sell = buy, sell
 
         if usd_buy != "---" or eur_buy != "---":
-            res.append({
+            print(f"  [✓] Hash Bank: USD {usd_buy}/{usd_sell}")
+            return [{
                 "bank": "Hash Bank",
                 "is_online": False,
                 "usd_buy": usd_buy, "usd_sell": usd_sell,
                 "eur_buy": eur_buy, "eur_sell": eur_sell,
                 "updated_at_ms": now
-            })
-            
-        return res
+            }]
+        
+        return []
     except Exception as e:
         print(f"  [!] Ошибка Hash Bank: {e}")
         return []
