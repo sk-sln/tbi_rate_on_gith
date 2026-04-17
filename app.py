@@ -146,6 +146,66 @@ def get_all_myfin():
         
     return results
 
+
+def get_hashbank():
+    """Парсер для Hash Bank (https://hashbank.ge/en)"""
+    url = "https://hashbank.ge/en"
+    try:
+        print("  [+] Парсим Hash Bank...")
+        # Используем сессию для стабильности
+        session = requests.Session()
+        response = session.get(url, headers=HEADERS, timeout=15)
+        if response.statusCode != 200:
+            return []
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # На сайте Hash Bank курсы лежат в таблице внутри блока 'currency-wrapper'
+        # Находим строки таблицы с валютами
+        rows = soup.find_all('div', class_='currency-item')
+        
+        res = []
+        now = get_now_ms()
+
+        usd_buy, usd_sell = "---", "---"
+        eur_buy, eur_sell = "---", "---"
+
+        for row in rows:
+            # Находим название валюты (USD, EUR)
+            name_tag = row.find('div', class_='currency-name')
+            if not name_tag: continue
+            
+            currency_name = name_tag.text.strip().upper()
+            
+            # Находим значения покупки и продажи
+            # Обычно они идут в спанах или дивах с классом 'value'
+            values = row.find_all('div', class_='currency-value')
+            
+            if len(values) >= 2:
+                buy = clean_val(values[0].text)
+                sell = clean_val(values[1].text)
+                
+                if "USD" in currency_name:
+                    usd_buy, usd_sell = buy, sell
+                elif "EUR" in currency_name:
+                    eur_buy, eur_sell = buy, sell
+
+        if usd_buy != "---" or eur_buy != "---":
+            res.append({
+                "bank": "Hash Bank",
+                "is_online": False,
+                "usd_buy": usd_buy, "usd_sell": usd_sell,
+                "eur_buy": eur_buy, "eur_sell": eur_sell,
+                "updated_at_ms": now
+            })
+            
+        return res
+    except Exception as e:
+        print(f"  [!] Ошибка Hash Bank: {e}")
+        return []
+
+
+
 def get_tbc():
     try:
         r = requests.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", headers=HEADERS, timeout=20)
@@ -188,7 +248,7 @@ def parser_loop():
     time.sleep(10) 
     while True:
         print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
-        parsers = [get_tbc, get_bog, get_liberty, get_all_myfin]
+        parsers = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
         
         for f in parsers:
             try:
