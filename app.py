@@ -34,7 +34,7 @@ def clean_val(val):
     return v.replace(',', '.')
 
 def cleanup_memory():
-    """Освобождаем RAM от 'зомби' процессов браузера"""
+    """Просто чистим систему от зависших процессов браузера"""
     gc.collect()
     try:
         os.system("pkill -9 -f webkit")
@@ -42,7 +42,7 @@ def cleanup_memory():
     except:
         pass
 
-# --- ТВОИ ОРИГИНАЛЬНЫЕ ПАРСЕРЫ (ИЗ OLD ВЕРСИИ) ---
+# --- ТВОИ ОРИГИНАЛЬНЫЕ ПАРСЕРЫ (ИЗ OLD ФАЙЛА) ---
 
 def get_tbc():
     try:
@@ -87,7 +87,6 @@ def get_liberty():
             browser = p.webkit.launch(headless=True)
             page = browser.new_page()
             page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
-            # Твоя оригинальная логика селекторов
             all_rates = page.locator(".currency-rates__currency").all_inner_texts()
             browser.close()
             if len(all_rates) >= 16:
@@ -108,14 +107,7 @@ def get_all_myfin():
             browser = p.webkit.launch(headless=True)
             page = browser.new_page()
             page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="networkidle", timeout=60000)
-            # Используем твой оригинальный API-скрипт внутри страницы
-            data = page.evaluate("""async () => {
-                const r = await fetch("https://myfin.ge/api/exchangeRates", {
-                    method: "POST", headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"})
-                });
-                return await r.json();
-            }""")
+            data = page.evaluate('async () => { const r = await fetch("https://myfin.ge/api/exchangeRates", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"}) }); return await r.json(); }')
             browser.close()
             results = []
             for item in data.get('organizations', []):
@@ -137,17 +129,14 @@ def get_all_myfin():
 def get_hashbank():
     now = get_now_ms()
     try:
-        print("  [>] Hash Bank: Исправленный Playwright...")
+        print("  [>] Hash Bank: Запуск...")
         with sync_playwright() as p:
             browser = p.webkit.launch(headless=True)
             page = browser.new_page()
-            page.goto("https://hashbank.ge/en", wait_until="networkidle")
-            
-            # Более точный поиск цифр, чтобы не брать текст "We buy at"
-            rates = page.locator("xpath=//div[contains(@class, 'CurrencyItem_value')]").all_inner_texts()
+            page.goto("https://hashbank.ge/en", wait_until="networkidle", timeout=60000)
+            # Твой оригинальный поиск, но чуть точнее селектор
+            rates = page.locator(".CurrencyItem_value__yAt_4").all_inner_texts()
             browser.close()
-            
-            # В верстке Hash Bank обычно: 0-USD buy, 1-USD sell, 2-EUR buy, 3-EUR sell
             if len(rates) >= 4:
                 return [{
                     "bank": "Hash Bank", "is_online": False, "updated_at_ms": now,
@@ -158,7 +147,7 @@ def get_hashbank():
         print(f"  [!] Ошибка Hash Bank: {e}")
     return []
 
-# --- ГЛАВНЫЙ МОТОР (БЕЗОПАСНЫЙ) ---
+# --- ЦИКЛ И ОТПРАВКА ---
 
 def send_to_gas(data_list):
     try:
@@ -172,7 +161,7 @@ def parser_loop():
     while True:
         print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
-        cleanup_memory() # Чистим перед стартом
+        cleanup_memory() # Чистим ДО
         
         funcs = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
         for f in funcs:
@@ -181,9 +170,9 @@ def parser_loop():
                 for entry in res:
                     key = f"{entry['bank']}_{entry['is_online']}"
                     master_cache[key] = entry
-                cleanup_memory() # Чистим ПОСЛЕ КАЖДОГО банка
+                cleanup_memory() # Чистим ПОСЛЕ каждого банка
             except Exception as e:
-                print(f"  [!] Ошибка в цикле: {e}")
+                print(f"  [!] Ошибка в {f.__name__}: {e}")
             time.sleep(2)
 
         if master_cache:
@@ -194,9 +183,9 @@ def parser_loop():
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return f"Lari Scaner Active. Cache: {len(master_cache)}"
+def home(): return f"Online. Cache: {len(master_cache)}"
 
-# ЗАПУСК ПОТОКА ВНЕ __main__ (специально для Gunicorn на Koyeb)
+# Важно: Запуск потока ТУТ для Koyeb
 Thread(target=parser_loop, daemon=True).start()
 
 if __name__ == "__main__":
