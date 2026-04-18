@@ -116,9 +116,7 @@ def get_all_myfin():
     return []
 
 
-
-            
-    def get_hashbank():
+def get_hashbank():
     now = get_now_ms()
     try:
         print("  [>] Hash Bank: Запуск (режим экономии)...")
@@ -146,7 +144,6 @@ def get_all_myfin():
     except Exception as e:
         print(f"  [!] Ошибка Hash Bank: {e}")
     return []
-
 
 
 def get_tbc():
