@@ -5,7 +5,8 @@ import json
 import sys
 import os
 import random
-import psutil  # Не забудь добавить в requirements.txt
+import psutil
+import gc  # Добавлен сборщик мусора
 from datetime import datetime
 from flask import Flask
 from threading import Thread
@@ -22,6 +23,10 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "keep-alive"
 }
+
+# Инициализация глобальной сессии для TBC и BOG
+session = requests.Session()
+session.headers.update(HEADERS)
 
 master_cache = {}
 
@@ -66,7 +71,8 @@ def get_liberty():
                 else route.continue_()
             )
 
-            page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
+            # Изменено на domcontentloaded для скорости
+            page.goto("https://libertybank.ge/en/", wait_until="domcontentloaded", timeout=60000)
             all_rates = page.locator(".currency-rates__currency").all_inner_texts()
             browser.close()
             
@@ -143,7 +149,8 @@ def get_hashbank():
 
 def get_tbc():
     try:
-        r = requests.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", headers=HEADERS, timeout=20)
+        # Использование глобальной сессии вместо requests.get
+        r = session.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", timeout=20)
         rates = r.json().get('rates', [])
         now, res = get_now_ms(), create_record("TBC Bank", False, get_now_ms())
         for i in rates:
@@ -156,7 +163,8 @@ def get_tbc():
 
 def get_bog():
     try:
-        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=HEADERS, timeout=25)
+        # Использование глобальной сессии вместо requests.get
+        r = session.get("https://bankofgeorgia.ge/api/currencies/commercial", timeout=25)
         items = r.json()
         now = get_now_ms()
         branch = create_record("Bank of Georgia", False, now)
@@ -174,7 +182,7 @@ def get_bog():
 
 def send_to_gas(data_list):
     try:
-        resp = requests.post(GAS_URL, data=json.dumps(data_list), headers={"Content-Type": "text/plain"}, timeout=30)
+        resp = session.post(GAS_URL, data=json.dumps(data_list), headers={"Content-Type": "text/plain"}, timeout=30)
         return resp.text
     except Exception as e: return f"Error: {e}"
 
@@ -183,8 +191,8 @@ def parser_loop():
     global master_cache
     time.sleep(10) 
     while True:
-        # Предварительная зачистка
-        os.system("pkill -9 -f webkit || true")
+        # Предварительная зачистка (WebKit + Node.js)
+        os.system("pkill -9 -f webkit || true; pkill -9 -f node || true")
         
         print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         start_mem = get_mem_usage()
@@ -211,8 +219,8 @@ def parser_loop():
                 print(f"  [!] Ошибка в {name}: {e}")
             
             mem_after = get_mem_usage()
-            # Убиваем браузер сразу после функции
-            os.system("pkill -9 -f webkit || true")
+            # Убиваем браузер и ноду сразу после функции
+            os.system("pkill -9 -f webkit || true; pkill -9 -f node || true")
             time.sleep(5) # Пауза для очистки системы
             
             mem_cleaned = get_mem_usage()
@@ -223,6 +231,9 @@ def parser_loop():
         if master_cache:
             result = send_to_gas(list(master_cache.values()))
             print(f"--- ГАС ОТВЕТ: {result} ---")
+
+        # Агрессивная сборка мусора перед сном
+        gc.collect()
 
         end_mem = get_mem_usage()
         print(f"  [RAM] Цикл завершен. В покое: {end_mem} MB")
