@@ -34,27 +34,32 @@ def clean_val(val):
     return v.replace(',', '.')
 
 def cleanup_memory():
-    """Просто чистим систему от зависших процессов браузера"""
+    """Безопасная очистка: только Python GC и системный pkill для браузеров"""
     gc.collect()
     try:
+        # Убиваем только процессы браузеров, чтобы освободить RAM для следующего шага
         os.system("pkill -9 -f webkit")
         os.system("pkill -9 -f chromium")
     except:
         pass
 
-# --- ТВОИ ОРИГИНАЛЬНЫЕ ПАРСЕРЫ (ИЗ OLD ФАЙЛА) ---
+# --- ТВОИ ПАРСЕРЫ (ВОЗВРАЩЕНЫ К ОРИГИНАЛУ ИЗ APP.PY_OLD) ---
 
 def get_tbc():
     try:
         r = requests.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", headers=HEADERS, timeout=20)
-        rates = r.json().get('rates', [])
+        # ОСТАВЛЯЕМ ТВОЮ ЛОГИКУ КАК ЕСТЬ
+        data = r.json()
+        rates = data.get('rates', [])
         now = get_now_ms()
         res = {"bank": "TBC Bank", "is_online": False, "updated_at_ms": now}
         for i in rates:
             if i.get('iso') == 'USD':
-                res["usd_buy"], res["usd_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
+                res["usd_buy"] = clean_val(i.get('buyRate'))
+                res["usd_sell"] = clean_val(i.get('sellRate'))
             elif i.get('iso') == 'EUR':
-                res["eur_buy"], res["eur_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
+                res["eur_buy"] = clean_val(i.get('buyRate'))
+                res["eur_sell"] = clean_val(i.get('sellRate'))
         return [res]
     except Exception as e:
         print(f"  [!] Ошибка TBC: {e}")
@@ -63,6 +68,7 @@ def get_tbc():
 def get_bog():
     try:
         r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=HEADERS, timeout=20)
+        # Прямая работа с JSON, как в твоем исходнике
         items = r.json()
         now = get_now_ms()
         branch = {"bank": "Bank of Georgia", "is_online": False, "updated_at_ms": now}
@@ -134,7 +140,7 @@ def get_hashbank():
             browser = p.webkit.launch(headless=True)
             page = browser.new_page()
             page.goto("https://hashbank.ge/en", wait_until="networkidle", timeout=60000)
-            # Твой оригинальный поиск, но чуть точнее селектор
+            # Селектор из твоего рабочего оригинала
             rates = page.locator(".CurrencyItem_value__yAt_4").all_inner_texts()
             browser.close()
             if len(rates) >= 4:
@@ -147,13 +153,13 @@ def get_hashbank():
         print(f"  [!] Ошибка Hash Bank: {e}")
     return []
 
-# --- ЦИКЛ И ОТПРАВКА ---
-
 def send_to_gas(data_list):
     try:
         r = requests.post(GAS_URL, data=json.dumps(data_list), headers={"Content-Type": "text/plain"}, timeout=30)
         return r.text
     except Exception as e: return f"Error: {e}"
+
+# --- ЦИКЛ С ОЧИСТКОЙ МЕЖДУ ШАГАМИ ---
 
 def parser_loop():
     global master_cache
@@ -161,16 +167,19 @@ def parser_loop():
     while True:
         print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         
-        cleanup_memory() # Чистим ДО
+        cleanup_memory() # Чистим перед началом
         
-        funcs = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
-        for f in funcs:
+        parsers = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
+        for f in parsers:
             try:
-                res = f()
-                for entry in res:
-                    key = f"{entry['bank']}_{entry['is_online']}"
-                    master_cache[key] = entry
-                cleanup_memory() # Чистим ПОСЛЕ каждого банка
+                res_list = f()
+                if res_list:
+                    for entry in res_list:
+                        key = f"{entry['bank']}_{entry['is_online']}"
+                        master_cache[key] = entry
+                
+                # Ключевой момент: чистим ПАМЯТЬ ПОСЛЕ КАЖДОГО банка
+                cleanup_memory()
             except Exception as e:
                 print(f"  [!] Ошибка в {f.__name__}: {e}")
             time.sleep(2)
@@ -185,7 +194,7 @@ app = Flask(__name__)
 @app.route('/')
 def home(): return f"Online. Cache: {len(master_cache)}"
 
-# Важно: Запуск потока ТУТ для Koyeb
+# Гарантированный запуск потока для Koyeb
 Thread(target=parser_loop, daemon=True).start()
 
 if __name__ == "__main__":
