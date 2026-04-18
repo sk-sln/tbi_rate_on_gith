@@ -234,10 +234,15 @@ def send_to_gas(data_list):
     except Exception as e: return f"Error: {e}"
 
 # --- ГЛАВНЫЙ ЦИКЛ ---
+# --- ГЛАВНЫЙ ЦИКЛ ---
 def parser_loop():
     global master_cache
     time.sleep(10) 
     while True:
+        # 1. ПЕРЕД НАЧАЛОМ ЦИКЛА
+        # Убиваем "зомби-процессы" от прошлых запусков, чтобы освободить RAM
+        os.system("pkill -9 -f webkit || true")
+        
         print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
         parsers = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
         
@@ -250,6 +255,11 @@ def parser_loop():
                         master_cache[key] = entry
             except Exception as e:
                 print(f"  [!] Ошибка в {f.__name__}: {e}")
+            
+            # 2. СРАЗУ ПОСЛЕ КАЖДОГО БАНКА
+            # Как только один банк закончил работу, принудительно очищаем память
+            os.system("pkill -9 -f webkit || true")
+            
             time.sleep(2)
 
         if master_cache:
