@@ -45,155 +45,107 @@ def create_record(bank_name, is_online, timestamp):
 
 def get_liberty():
     now = get_now_ms()
-    # Создаем запись через твою стандартную функцию
-    record = create_record("Liberty Bank", False, now)
-    
-    print("  [>] Liberty: Запуск WebKit в Docker...")
     try:
+        print("  [>] Liberty: Запуск WebKit (режим экономии)...")
         with sync_playwright() as p:
-            # Для WebKit в Docker-образе Playwright аргументы не нужны, 
-            # они только вызывают ошибки "Unknown option"
             browser = p.webkit.launch(headless=True)
-            
-            context = browser.new_context(
-                user_agent=HEADERS["User-Agent"], # Используем твой глобальный HEADERS
-                viewport={'width': 1280, 'height': 800}
+            page = browser.new_page()
+
+            # БЛОКИРОВКА РЕСУРСОВ
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
             )
+
+            # Используем domcontentloaded, чтобы не ждать загрузки заблокированных элементов
+            page.goto("https://libertybank.ge/en/", wait_until="domcontentloaded", timeout=60000)
             
-            page = context.new_page()
-            
-            # Переходим на сайт (таймаут 60 сек, так как Liberty иногда грузится долго)
-            page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
-            
-            # Ждем появления таблицы с курсами
-            page.wait_for_selector(".currency-rates__currency", timeout=20000)
-            
-            # Извлекаем тексты всех ячеек с валютами
             all_rates = page.locator(".currency-rates__currency").all_inner_texts()
-            
-            if len(all_rates) >= 16:
-                # Наполняем record, пропуская данные через твой clean_val
-                # Индексы 1, 2 (USD) и 14, 15 (EUR) проверены на сайте
-                record["usd_buy"] = clean_val(all_rates[1])
-                record["usd_sell"] = clean_val(all_rates[2])
-                record["eur_buy"] = clean_val(all_rates[14])
-                record["eur_sell"] = clean_val(all_rates[15])
-                
-                print(f"  [+] Liberty: OK (USD: {record['usd_buy']}/{record['usd_sell']})")
-            else:
-                print(f"  [-] Liberty: Структура изменилась (найдено элементов: {len(all_rates)})")
-            
             browser.close()
             
+            if len(all_rates) >= 16:
+                return [{
+                    "bank": "Liberty Bank", "is_online": False, "updated_at_ms": now,
+                    "usd_buy": clean_val(all_rates[1]), "usd_sell": clean_val(all_rates[2]),
+                    "eur_buy": clean_val(all_rates[14]), "eur_sell": clean_val(all_rates[15])
+                }]
     except Exception as e:
-        # Теперь эта ошибка не "уронит" весь цикл
-        print(f"  [!] Ошибка Liberty в Docker: {e}")
-    
-    return [record]
+        print(f"  [!] Ошибка Liberty: {e}")
+    return []
 
 
 # --- ОСТАЛЬНЫЕ ПАРСЕРЫ (БЕЗ ИЗМЕНЕНИЙ) ---
 
 import random
 
+
 def get_all_myfin():
-    print("  [>] MyFin: Запуск WebKit (Обход 403 через Playwright)...")
-    results = []
     now = get_now_ms()
-    
     try:
+        print("  [>] MyFin: Запуск (режим экономии)...")
         with sync_playwright() as p:
-            # Используем WebKit, так как он уже проверен на Liberty
             browser = p.webkit.launch(headless=True)
-            context = browser.new_context(user_agent=HEADERS["User-Agent"])
-            page = context.new_page()
+            page = browser.new_page()
+
+            # БЛОКИРОВКА РЕСУРСОВ
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
+            )
+
+            page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="domcontentloaded", timeout=60000)
             
-            # Идем прямо на API URL (или на страницу, если API блокирует)
-            # Попробуем сначала зайти на страницу, чтобы "прогреть" куки
-            page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="networkidle", timeout=60000)
-            
-            # Выполняем скрипт прямо в браузере, чтобы забрать JSON из API MyFin
-            # Это самый надежный способ обойти 403
-            api_script = """
-            async () => {
-                const response = await fetch("https://myfin.ge/api/exchangeRates", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"})
-                });
-                return await response.json();
-            }
-            """
-            data = page.evaluate(api_script)
-            
-            orgs = data.get('organizations', [])
-            for item in orgs:
-                if item.get('type') in ["Bank", "MicrofinanceOrganization"]:
-                    name = item.get('name', {}).get('en')
-                    if name:
-                        rec = create_record(name, False, now)
-                        rates = item.get('best', {})
-                        usd, eur = rates.get('USD', {}), rates.get('EUR', {})
-                        rec["usd_buy"], rec["usd_sell"] = clean_val(usd.get('buy')), clean_val(usd.get('sell'))
-                        rec["eur_buy"], rec["eur_sell"] = clean_val(eur.get('buy')), clean_val(eur.get('sell'))
-                        results.append(rec)
-            
+            data = page.evaluate('async () => { const r = await fetch("https://myfin.ge/api/exchangeRates", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"}) }); return await r.json(); }')
             browser.close()
-            print(f"  [+] MyFin: OK (Собрано {len(results)} банков)")
             
+            results = []
+            for item in data.get('organizations', []):
+                name = item.get('name', {}).get('en')
+                if name:
+                    rates = item.get('best', {})
+                    results.append({
+                        "bank": name, "is_online": False, "updated_at_ms": now,
+                        "usd_buy": clean_val(rates.get('USD', {}).get('buy')),
+                        "usd_sell": clean_val(rates.get('USD', {}).get('sell')),
+                        "eur_buy": clean_val(rates.get('EUR', {}).get('buy')),
+                        "eur_sell": clean_val(rates.get('EUR', {}).get('sell'))
+                    })
+            return results
     except Exception as e:
-        print(f"  [!] Ошибка MyFin через WebKit: {e}")
-        
-    return results
+        print(f"  [!] Ошибка MyFin: {e}")
+    return []
 
 
-def get_hashbank():
-    """Парсер для Hash Bank через Playwright (WebKit)"""
-    url = "https://hashbank.ge/en"
+
+            
+    def get_hashbank():
     now = get_now_ms()
     try:
-        print("  [>] Hash Bank: Запуск через Playwright...")
+        print("  [>] Hash Bank: Запуск (режим экономии)...")
         with sync_playwright() as p:
-            # Используем ту же логику запуска, что и для Liberty
             browser = p.webkit.launch(headless=True)
-            context = browser.new_context(user_agent=HEADERS["User-Agent"])
-            page = context.new_page()
+            page = browser.new_page()
+
+            # БЛОКИРОВКА РЕСУРСОВ
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
+            )
+
+            page.goto("https://hashbank.ge/en", wait_until="domcontentloaded", timeout=60000)
             
-            # Переходим и ждем загрузки основного контента
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            
-            # Вместо поиска в __NEXT_DATA__ (который может быть зашифрован),
-            # берем данные прямо из отрисованных элементов интерфейса
-            # Селекторы основаны на твоем файле 'hash bank.txt'
-            
-            usd_buy = page.locator('div:has-text("USD") + div div:nth-child(1)').first.inner_text()
-            usd_sell = page.locator('div:has-text("USD") + div div:nth-child(2)').first.inner_text()
-            
-            eur_buy = page.locator('div:has-text("EUR") + div div:nth-child(1)').first.inner_text()
-            eur_sell = page.locator('div:has-text("EUR") + div div:nth-child(2)').first.inner_text()
-            
+            rates = page.locator(".CurrencyItem_value__yAt_4").all_inner_texts()
             browser.close()
-
-            # Чистим значения через твою функцию clean_val
-            ub, us = clean_val(usd_buy), clean_val(usd_sell)
-            eb, es = clean_val(eur_buy), clean_val(eur_sell)
-
-            if ub != "---" or eb != "---":
-                print(f"  [+] Hash Bank: OK (USD: {ub}/{us})")
+            
+            if len(rates) >= 4:
                 return [{
-                    "bank": "Hash Bank",
-                    "is_online": False,
-                    "usd_buy": ub, "usd_sell": us,
-                    "eur_buy": eb, "eur_sell": es,
-                    "updated_at_ms": now
+                    "bank": "Hash Bank", "is_online": False, "updated_at_ms": now,
+                    "usd_buy": clean_val(rates[0]), "usd_sell": clean_val(rates[1]),
+                    "eur_buy": clean_val(rates[2]), "eur_sell": clean_val(rates[3])
                 }]
-            
-            print("  [!] Hash Bank: Данные не найдены на странице")
-            return []
-            
     except Exception as e:
-        print(f"  [!] Ошибка Hash Bank (Playwright): {e}")
-        return []
+        print(f"  [!] Ошибка Hash Bank: {e}")
+    return []
 
 
 
