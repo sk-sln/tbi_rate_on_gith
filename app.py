@@ -51,14 +51,14 @@ def get_liberty():
             browser = p.webkit.launch(headless=True)
             page = browser.new_page()
 
-            # БЛОКИРОВКА РЕСУРСОВ
+            # Оставляем блокировку только для самого тяжелого: картинок и видео
             page.route("**/*", lambda route: route.abort() 
-                if route.request.resource_type in ["image", "media", "font"] 
+                if route.request.resource_type in ["image", "media"] 
                 else route.continue_()
             )
 
-            # Используем domcontentloaded, чтобы не ждать загрузки заблокированных элементов
-            page.goto("https://libertybank.ge/en/", wait_until="domcontentloaded", timeout=60000)
+            # Возвращаем networkidle, чтобы сайт успел подгрузить свои скрипты
+            page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
             
             all_rates = page.locator(".currency-rates__currency").all_inner_texts()
             browser.close()
