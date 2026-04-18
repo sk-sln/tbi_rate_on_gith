@@ -3,16 +3,16 @@ from bs4 import BeautifulSoup
 import time
 import json
 import sys
-# Принудительная очистка буфера вывода
-sys.stdout.reconfigure(line_buffering=True)
-import sys
 import os
 import random
-import psutil  # Добавили для мониторинга (нужно в requirements.txt)
+import psutil  # Не забудь добавить в requirements.txt
 from datetime import datetime
 from flask import Flask
 from threading import Thread
-from playwright.sync_api import sync_playwright  # Добавили для Liberty
+from playwright.sync_api import sync_playwright
+
+# Принудительная очистка буфера вывода
+sys.stdout.reconfigure(line_buffering=True)
 
 # --- НАСТРОЙКИ ---
 GAS_URL = "https://script.google.com/macros/s/AKfycbxulwXBqzuxXygyKy-HFvoRJJlos7SgN1HExVrNDhMyTpUnmHE_EA_GXaXUlv3D4_pSuA/exec" 
@@ -25,10 +25,12 @@ HEADERS = {
 
 master_cache = {}
 
-# --- ФУНКЦИЯ МОНИТОРИНГА RAM ---
+# --- ФУНКЦИИ МОНИТОРИНГА ---
 def get_mem_usage():
+    """Возвращает текущее потребление RAM основным процессом в МБ."""
     process = psutil.Process(os.getpid())
-    return round(process.memory_info().rss / 1024 / 1024, 2)
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    return round(mem_mb, 2)
 
 def get_now_ms():
     return int(time.time() * 1000)
@@ -50,30 +52,111 @@ def create_record(bank_name, is_online, timestamp):
 
 # --- ПАРСЕРЫ ---
 
+def get_liberty():
+    now = get_now_ms()
+    try:
+        print("  [>] Liberty: Запуск WebKit (режим экономии)...")
+        with sync_playwright() as p:
+            browser = p.webkit.launch(headless=True)
+            context = browser.new_context(viewport={'width': 800, 'height': 600})
+            page = context.new_page()
+
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media"] 
+                else route.continue_()
+            )
+
+            page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
+            all_rates = page.locator(".currency-rates__currency").all_inner_texts()
+            browser.close()
+            
+            if len(all_rates) >= 16:
+                return [{
+                    "bank": "Liberty Bank", "is_online": False, "updated_at_ms": now,
+                    "usd_buy": clean_val(all_rates[1]), "usd_sell": clean_val(all_rates[2]),
+                    "eur_buy": clean_val(all_rates[14]), "eur_sell": clean_val(all_rates[15])
+                }]
+    except Exception as e:
+        print(f"  [!] Ошибка Liberty: {e}")
+    return []
+
+def get_all_myfin():
+    now = get_now_ms()
+    try:
+        print("  [>] MyFin: Запуск (режим экономии)...")
+        with sync_playwright() as p:
+            browser = p.webkit.launch(headless=True)
+            page = browser.new_page()
+
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
+            )
+
+            page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="domcontentloaded", timeout=60000)
+            data = page.evaluate('async () => { const r = await fetch("https://myfin.ge/api/exchangeRates", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"}) }); return await r.json(); }')
+            browser.close()
+            
+            results = []
+            for item in data.get('organizations', []):
+                name = item.get('name', {}).get('en')
+                if name:
+                    rates = item.get('best', {})
+                    results.append({
+                        "bank": name, "is_online": False, "updated_at_ms": now,
+                        "usd_buy": clean_val(rates.get('USD', {}).get('buy')),
+                        "usd_sell": clean_val(rates.get('USD', {}).get('sell')),
+                        "eur_buy": clean_val(rates.get('EUR', {}).get('buy')),
+                        "eur_sell": clean_val(rates.get('EUR', {}).get('sell'))
+                    })
+            return results
+    except Exception as e:
+        print(f"  [!] Ошибка MyFin: {e}")
+    return []
+
+def get_hashbank():
+    now = get_now_ms()
+    try:
+        print("  [>] Hash Bank: Запуск (режим экономии)...")
+        with sync_playwright() as p:
+            browser = p.webkit.launch(headless=True)
+            page = browser.new_page()
+
+            page.route("**/*", lambda route: route.abort() 
+                if route.request.resource_type in ["image", "media", "font"] 
+                else route.continue_()
+            )
+
+            page.goto("https://hashbank.ge/en", wait_until="domcontentloaded", timeout=60000)
+            rates = page.locator(".CurrencyItem_value__yAt_4").all_inner_texts()
+            browser.close()
+            
+            if len(rates) >= 4:
+                return [{
+                    "bank": "Hash Bank", "is_online": False, "updated_at_ms": now,
+                    "usd_buy": clean_val(rates[0]), "usd_sell": clean_val(rates[1]),
+                    "eur_buy": clean_val(rates[2]), "eur_sell": clean_val(rates[3])
+                }]
+    except Exception as e:
+        print(f"  [!] Ошибка Hash Bank: {e}")
+    return []
+
 def get_tbc():
     try:
-        url = "https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US"
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        data = r.json()
-        rates = data.get('rates', [])
-        now = get_now_ms()
-        res = create_record("TBC Bank", False, now)
+        r = requests.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", headers=HEADERS, timeout=20)
+        rates = r.json().get('rates', [])
+        now, res = get_now_ms(), create_record("TBC Bank", False, get_now_ms())
         for i in rates:
             if i.get('iso') == 'USD':
-                res["usd_buy"] = clean_val(i.get('buyRate'))
-                res["usd_sell"] = clean_val(i.get('sellRate'))
+                res["usd_buy"], res["usd_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
             elif i.get('iso') == 'EUR':
-                res["eur_buy"] = clean_val(i.get('buyRate'))
-                res["eur_sell"] = clean_val(i.get('sellRate'))
+                res["eur_buy"], res["eur_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
         return [res]
-    except Exception as e:
-        print(f"  [!] Ошибка TBC: {e}")
-        return [create_record("TBC Bank", False, 0)]
+    except Exception: return [create_record("TBC Bank", False, 0)]
 
 def get_bog():
     try:
-        url = "https://bankofgeorgia.ge/api/currencies/commercial"
-        r = requests.get(url, headers=HEADERS, timeout=25)
+        r = requests.get("https://bankofgeorgia.ge/api/currencies/commercial", headers=HEADERS, timeout=25)
         items = r.json()
         now = get_now_ms()
         branch = create_record("Bank of Georgia", False, now)
@@ -81,109 +164,13 @@ def get_bog():
         for i in items:
             code = str(i.get('code', '')).upper()
             if code == 'USD':
-                branch["usd_buy"] = clean_val(i.get('buy'))
-                branch["usd_sell"] = clean_val(i.get('sell'))
-                online["usd_buy"] = clean_val(i.get('buyApp', branch["usd_buy"]))
-                online["usd_sell"] = clean_val(i.get('sellApp', branch["usd_sell"]))
+                branch["usd_buy"], branch["usd_sell"] = clean_val(i.get('buy')), clean_val(i.get('sell'))
+                online["usd_buy"], online["usd_sell"] = clean_val(i.get('buyApp', branch["usd_buy"])), clean_val(i.get('sellApp', branch["usd_sell"]))
             elif code == 'EUR':
-                branch["eur_buy"] = clean_val(i.get('buy'))
-                branch["eur_sell"] = clean_val(i.get('sell'))
-                online["eur_buy"] = clean_val(i.get('buyApp', branch["eur_buy"]))
-                online["eur_sell"] = clean_val(i.get('sellApp', branch["eur_sell"]))
+                branch["eur_buy"], branch["eur_sell"] = clean_val(i.get('buy')), clean_val(i.get('sell'))
+                online["eur_buy"], online["eur_sell"] = clean_val(i.get('buyApp', branch["eur_buy"])), clean_val(i.get('sellApp', branch["eur_sell"]))
         return [branch, online]
-    except Exception as e:
-        print(f"  [!] Ошибка BOG: {e}")
-        return [create_record("Bank of Georgia", False, 0)]
-
-def get_liberty():
-    now = get_now_ms()
-    record = create_record("Liberty Bank", False, now)
-    print("  [>] Liberty: Запуск WebKit в Docker...")
-    try:
-        with sync_playwright() as p:
-            browser = p.webkit.launch(headless=True)
-            context = browser.new_context(
-                user_agent=HEADERS["User-Agent"],
-                viewport={'width': 1280, 'height': 800}
-            )
-            page = context.new_page()
-            page.goto("https://libertybank.ge/en/", wait_until="networkidle", timeout=60000)
-            page.wait_for_selector(".currency-rates__currency", timeout=20000)
-            all_rates = page.locator(".currency-rates__currency").all_inner_texts()
-            if len(all_rates) >= 16:
-                record["usd_buy"] = clean_val(all_rates[1])
-                record["usd_sell"] = clean_val(all_rates[2])
-                record["eur_buy"] = clean_val(all_rates[14])
-                record["eur_sell"] = clean_val(all_rates[15])
-                print(f"  [+] Liberty: OK")
-            browser.close()
-    except Exception as e:
-        print(f"  [!] Ошибка Liberty: {e}")
-    return [record]
-
-def get_all_myfin():
-    print("  [>] MyFin: Запуск WebKit (Обход 403)...")
-    results = []
-    now = get_now_ms()
-    try:
-        with sync_playwright() as p:
-            browser = p.webkit.launch(headless=True)
-            context = browser.new_context(user_agent=HEADERS["User-Agent"])
-            page = context.new_page()
-            page.goto("https://myfin.ge/en/exchange-rates/tbilisi", wait_until="networkidle", timeout=60000)
-            api_script = """
-            async () => {
-                const response = await fetch("https://myfin.ge/api/exchangeRates", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({"city": "tbilisi", "includeOnline": false, "availability": "All"})
-                });
-                return await response.json();
-            }
-            """
-            data = page.evaluate(api_script)
-            orgs = data.get('organizations', [])
-            for item in orgs:
-                if item.get('type') in ["Bank", "MicrofinanceOrganization"]:
-                    name = item.get('name', {}).get('en')
-                    if name:
-                        rec = create_record(name, False, now)
-                        rates = item.get('best', {})
-                        usd = rates.get('USD', {})
-                        eur = rates.get('EUR', {})
-                        rec["usd_buy"] = clean_val(usd.get('buy'))
-                        rec["usd_sell"] = clean_val(usd.get('sell'))
-                        rec["eur_buy"] = clean_val(eur.get('buy'))
-                        rec["eur_sell"] = clean_val(eur.get('sell'))
-                        results.append(rec)
-            browser.close()
-            print(f"  [+] MyFin: OK")
-    except Exception as e:
-        print(f"  [!] Ошибка MyFin: {e}")
-    return results
-
-def get_hashbank():
-    now = get_now_ms()
-    try:
-        print("  [>] Hash Bank: Запуск через Playwright...")
-        with sync_playwright() as p:
-            browser = p.webkit.launch(headless=True)
-            context = browser.new_context(user_agent=HEADERS["User-Agent"])
-            page = context.new_page()
-            page.goto("https://hashbank.ge/en", wait_until="networkidle", timeout=30000)
-            usd_buy = page.locator('div:has-text("USD") + div div:nth-child(1)').first.inner_text()
-            usd_sell = page.locator('div:has-text("USD") + div div:nth-child(2)').first.inner_text()
-            eur_buy = page.locator('div:has-text("EUR") + div div:nth-child(1)').first.inner_text()
-            eur_sell = page.locator('div:has-text("EUR") + div div:nth-child(2)').first.inner_text()
-            browser.close()
-            return [{
-                "bank": "Hash Bank", "is_online": False, "updated_at_ms": now,
-                "usd_buy": clean_val(usd_buy), "usd_sell": clean_val(usd_sell),
-                "eur_buy": clean_val(eur_buy), "eur_sell": clean_val(eur_sell)
-            }]
-    except Exception as e:
-        print(f"  [!] Ошибка Hash Bank: {e}")
-        return []
+    except Exception: return [create_record("Bank of Georgia", False, 0)]
 
 def send_to_gas(data_list):
     try:
@@ -191,18 +178,28 @@ def send_to_gas(data_list):
         return resp.text
     except Exception as e: return f"Error: {e}"
 
-# --- ГЛАВНЫЙ ЦИКЛ ---
+# --- ГЛАВНЫЙ ЦИКЛ С МОНИТОРИНГОМ RAM ---
 def parser_loop():
     global master_cache
     time.sleep(10) 
     while True:
-        print(f"\n--- [BASELINE TEST] {datetime.now().strftime('%H:%M:%S')} ---")
-        base_mem = get_mem_usage()
-        print(f"  [RAM] База старт: {base_mem} MB")
+        # Предварительная зачистка
+        os.system("pkill -9 -f webkit || true")
         
-        parsers = [get_tbc, get_bog, get_liberty, get_all_myfin, get_hashbank]
+        print(f"\n--- ЦИКЛ ПАРСИНГА: {datetime.now().strftime('%H:%M:%S')} ---")
+        start_mem = get_mem_usage()
+        print(f"  [RAM] База перед стартом: {start_mem} MB")
         
-        for f in parsers:
+        # Список функций для парсинга
+        parsers = [
+            ("TBC", get_tbc), 
+            ("BOG", get_bog), 
+            ("Liberty", get_liberty), 
+            ("MyFin", get_all_myfin), 
+            ("HashBank", get_hashbank)
+        ]
+        
+        for name, f in parsers:
             mem_before = get_mem_usage()
             try:
                 res_list = f()
@@ -211,17 +208,24 @@ def parser_loop():
                         key = f"{entry['bank']}_{entry['is_online']}"
                         master_cache[key] = entry
             except Exception as e:
-                print(f"  [!] Ошибка в {f.__name__}: {e}")
+                print(f"  [!] Ошибка в {name}: {e}")
             
             mem_after = get_mem_usage()
-            print(f"  [RAM] {f.__name__}: +{round(mem_after - mem_before, 2)} MB (Всего: {mem_after} MB)")
-            time.sleep(2)
+            # Убиваем браузер сразу после функции
+            os.system("pkill -9 -f webkit || true")
+            time.sleep(5) # Пауза для очистки системы
+            
+            mem_cleaned = get_mem_usage()
+            diff = round(mem_after - mem_before, 2)
+            freed = round(mem_after - mem_cleaned, 2)
+            print(f"  [RAM] {name}: +{diff} MB (Пик: {mem_after} MB) | Очищено: {freed} MB")
 
         if master_cache:
             result = send_to_gas(list(master_cache.values()))
             print(f"--- ГАС ОТВЕТ: {result} ---")
 
-        print(f"  [RAM] Финиш цикла: {get_mem_usage()} MB")
+        end_mem = get_mem_usage()
+        print(f"  [RAM] Цикл завершен. В покое: {end_mem} MB")
         print(f"--- СОН 14 МИНУТ ---")
         time.sleep(840)
 
@@ -230,7 +234,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home(): 
-    return f"Baseline Test Active. RAM: {get_mem_usage()} MB"
+    return f"Tracker Online. Last data points: {len(master_cache)}"
 
 @app.route('/health')
 def health():
