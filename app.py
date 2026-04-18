@@ -209,7 +209,7 @@ def parser_loop():
             # Как только один банк закончил работу, принудительно очищаем память
             os.system("pkill -9 -f webkit || true")
             
-            time.sleep(2)
+            time.sleep(10)
 
         if master_cache:
             result = send_to_gas(list(master_cache.values()))
