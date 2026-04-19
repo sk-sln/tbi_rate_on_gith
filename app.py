@@ -238,6 +238,7 @@ def index():
     return f"Status: Running. Cache size: {len(master_cache)}. RAM: {get_mem_usage()} MB"
 
 if __name__ == "__main__":
+    print("!!! ГЛАВНЫЙ ПОТОК ЗАПУЩЕН, СТАРТУЮ ПАРСЕР...")
     t = Thread(target=parser_loop)
     t.daemon = True
     t.start()
