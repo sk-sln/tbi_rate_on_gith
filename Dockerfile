@@ -1,5 +1,5 @@
 # Используем официальный образ Playwright, где ВСЁ уже установлено
-FROM mcr.microsoft.com/playwright/python:latest
+FROM mcr.microsoft.com/playwright/python:v1.59.1-jammy
 
 # Указываем рабочую папку
 WORKDIR /app
