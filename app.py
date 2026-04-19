@@ -147,38 +147,21 @@ def get_hashbank():
         print(f"  [!] Ошибка Hash Bank: {e}")
     return []
 
-def get_tbc():
-    try:
-        # Использование глобальной сессии вместо requests.get
-        r = session.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", timeout=20)
-        rates = r.json().get('rates', [])
-        now, res = get_now_ms(), create_record("TBC Bank", False, get_now_ms())
-        for i in rates:
-            if i.get('iso') == 'USD':
-                res["usd_buy"], res["usd_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
-            elif i.get('iso') == 'EUR':
-                res["eur_buy"], res["eur_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
-        return [res]
-    except Exception: return [create_record("TBC Bank", False, 0)]
+#def get_tbc():
+#    try:
+#        # Использование глобальной сессии вместо requests.get
+#        r = session.get("https://apigw.tbcbank.ge/api/v1/exchangeRates/commercialList?locale=en-US", timeout=20)
+#        rates = r.json().get('rates', [])
+#        now, res = get_now_ms(), create_record("TBC Bank", False, get_now_ms())
+#        for i in rates:
+#            if i.get('iso') == 'USD':
+#                res["usd_buy"], res["usd_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
+#            elif i.get('iso') == 'EUR':
+#                res["eur_buy"], res["eur_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
+#        return [res]
+#    except Exception: return [create_record("TBC Bank", False, 0)]
 
-def get_bog():
-    try:
-        # Использование глобальной сессии вместо requests.get
-        r = session.get("https://bankofgeorgia.ge/api/currencies/commercial", timeout=25)
-        items = r.json()
-        now = get_now_ms()
-        branch = create_record("Bank of Georgia", False, now)
-        online = create_record("Bank of Georgia", True, now)
-        for i in items:
-            code = str(i.get('code', '')).upper()
-            if code == 'USD':
-                branch["usd_buy"], branch["usd_sell"] = clean_val(i.get('buy')), clean_val(i.get('sell'))
-                online["usd_buy"], online["usd_sell"] = clean_val(i.get('buyApp', branch["usd_buy"])), clean_val(i.get('sellApp', branch["usd_sell"]))
-            elif code == 'EUR':
-                branch["eur_buy"], branch["eur_sell"] = clean_val(i.get('buy')), clean_val(i.get('sell'))
-                online["eur_buy"], online["eur_sell"] = clean_val(i.get('buyApp', branch["eur_buy"])), clean_val(i.get('sellApp', branch["eur_sell"]))
-        return [branch, online]
-    except Exception: return [create_record("Bank of Georgia", False, 0)]
+
 
 def send_to_gas(data_list):
     try:
@@ -200,10 +183,9 @@ def parser_loop():
         
         # Список функций для парсинга
         parsers = [
-            ("TBC", get_tbc), 
-            ("BOG", get_bog), 
+            #("TBC", get_tbc), 
             ("Liberty", get_liberty), 
-            #("MyFin", get_all_myfin), 
+            ("MyFin", get_all_myfin), 
             ("HashBank", get_hashbank)
         ]
         
