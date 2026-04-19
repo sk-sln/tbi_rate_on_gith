@@ -4,6 +4,7 @@ import time
 import json
 import sys
 import os
+os.environ['PYTHONUNBUFFERED'] = "1"
 import random
 import psutil
 import gc
