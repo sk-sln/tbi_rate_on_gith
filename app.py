@@ -6,6 +6,7 @@ import sys
 import os
 import random
 import psutil
+import re
 import gc  # Добавлен сборщик мусора
 from datetime import datetime
 from flask import Flask
@@ -160,7 +161,61 @@ def get_hashbank():
 #                res["eur_buy"], res["eur_sell"] = clean_val(i.get('buyRate')), clean_val(i.get('sellRate'))
 #        return [res]
 #    except Exception: return [create_record("TBC Bank", False, 0)]
+import requests
+import re
+import json
+import time
 
+def get_minfin_ua():
+    url = "https://minfin.com.ua/ua/currency/banks/usd/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    current_time_ms = int(time.time() * 1000)
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return []
+            
+        match = re.search(r'window\.APP_INITIAL_STATE\s*=\s*(\{.*?\});', response.text)
+        if not match:
+            return []
+            
+        data = json.loads(match.group(1))
+        banks_data = data.get('currency', {}).get('banks', {}).get('data', [])
+        
+        results = []
+        # Список банков для мониторинга (можно дополнять)
+        target_banks = ["Приватбанк", "Ощадбанк", "Укрексімбанк", "Райффайзен Банк", "ПУМБ", "Сенс Банк"]
+        
+        for bank in banks_data:
+            name = bank.get('name')
+            if name in target_banks:
+                rates = bank.get('rates', {})
+                
+                # Извлекаем USD и EUR
+                usd = rates.get('usd', {})
+                eur = rates.get('eur', {})
+                
+                # Формируем объект строго по твоей схеме
+                entry = {
+                    "bank": f"{name} (UA)", # Добавил метку UA, чтобы не путать с грузинскими в базе
+                    "is_online": False,      # На этой странице Минфина курсы отделений
+                    "usd_buy": str(usd.get('buy')) if usd.get('buy') else "N/A",
+                    "usd_sell": str(usd.get('sell')) if usd.get('sell') else "N/A",
+                    "eur_buy": str(eur.get('buy')) if eur.get('buy') else "N/A",
+                    "eur_sell": str(eur.get('sell')) if eur.get('sell') else "N/A",
+                    "updated_at_ms": current_time_ms
+                }
+                results.append(entry)
+                
+        return results
+
+    except Exception as e:
+        print(f"Ошибка парсинга Minfin: {e}")
+        return []
 
 
 def send_to_gas(data_list):
@@ -185,8 +240,9 @@ def parser_loop():
         parsers = [
             #("TBC", get_tbc), 
             ("Liberty", get_liberty), 
-            ("MyFin", get_all_myfin), 
-            ("HashBank", get_hashbank)
+            ("MyFin", get_all_myfin),
+            ("HashBank", get_hashbank),
+            ("Minfin_ua", get_minfin_ua)
         ]
         
         for name, f in parsers:
