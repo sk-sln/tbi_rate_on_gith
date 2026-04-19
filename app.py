@@ -203,7 +203,7 @@ def parser_loop():
             ("TBC", get_tbc), 
             ("BOG", get_bog), 
             ("Liberty", get_liberty), 
-            ("MyFin", get_all_myfin), 
+            #("MyFin", get_all_myfin), 
             ("HashBank", get_hashbank)
         ]
         
