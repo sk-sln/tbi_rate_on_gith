@@ -1,5 +1,5 @@
 # Используем официальный образ Playwright, где ВСЁ уже установлено
-FROM mcr.microsoft.com/playwright/python:v1.42.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.58.0-jammy
 
 # Указываем рабочую папку
 WORKDIR /app
@@ -15,4 +15,4 @@ COPY . .
 EXPOSE 8080
 
 # Запускаем сразу gunicorn (WebKit уже внутри образа!)
-CMD ["gunicorn", "-w", "1", "--threads", "4", "--worker-class", "gthread", "--bind", "0.0.0.0:8080", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "-w", "1", "--bind", "0.0.0.0:8080", "app:app"]
